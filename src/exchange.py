@@ -78,6 +78,18 @@ class Exchange:
         return "live"
 
     async def _setup_leverage(self):
+        # OKX: set account mode to single-currency margin (required for futures)
+        if self.exchange_name == "okx":
+            try:
+                await self.exchange.private_post_account_set_account_level(
+                    {"acctLv": "2"}  # 2 = single-currency margin
+                )
+                logger.info("OKX account mode set to single-currency margin")
+            except Exception as e:
+                err = str(e).lower()
+                if "already" not in err and "no attribute" not in err:
+                    logger.warning("Set OKX account mode: %s", e)
+
         try:
             await self.exchange.set_leverage(
                 self.config.leverage, self.config.symbol,
@@ -136,10 +148,12 @@ class Exchange:
         tp_price: Optional[float] = None, sl_price: Optional[float] = None,
     ) -> OrderResult:
         params = {"timeInForce": "PostOnly"}
+        if self.exchange_name == "okx":
+            params["tdMode"] = self.config.margin_mode
         if tp_price is not None:
-            params["takeProfit"] = tp_price
+            params["takeProfit"] = {"triggerPrice": tp_price}
         if sl_price is not None:
-            params["stopLoss"] = sl_price
+            params["stopLoss"] = {"triggerPrice": sl_price}
 
         await self.rate_limiter.acquire("create_order")
         order = await retry_api_call(
@@ -163,10 +177,12 @@ class Exchange:
         tp_price: Optional[float] = None, sl_price: Optional[float] = None,
     ) -> OrderResult:
         params = {}
+        if self.exchange_name == "okx":
+            params["tdMode"] = self.config.margin_mode
         if tp_price is not None:
-            params["takeProfit"] = tp_price
+            params["takeProfit"] = {"triggerPrice": tp_price}
         if sl_price is not None:
-            params["stopLoss"] = sl_price
+            params["stopLoss"] = {"triggerPrice": sl_price}
 
         await self.rate_limiter.acquire("create_order")
         order = await retry_api_call(
@@ -351,7 +367,15 @@ class Exchange:
                 qv = bv * last
             perp_tickers.append((symbol, qv))
         perp_tickers.sort(key=lambda x: x[1], reverse=True)
-        top = [symbol for symbol, vol in perp_tickers[:limit]]
+        # Only include symbols that exist in our exchange's markets
+        available = set(self.exchange.markets.keys()) if self.exchange.markets else set()
+        top = []
+        for symbol, vol in perp_tickers:
+            if available and symbol not in available:
+                continue
+            top.append(symbol)
+            if len(top) >= limit:
+                break
         logger.info("Top %d volume: %s", limit, [s.split("/")[0] for s in top])
         return top
 
