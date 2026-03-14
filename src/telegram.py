@@ -1,0 +1,300 @@
+import os
+import logging
+import asyncio
+import aiohttp
+from datetime import datetime, timezone
+
+logger = logging.getLogger("futu.telegram")
+
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+COMMANDS = [
+    {"command": "status", "description": "Bot status + balance + positions"},
+    {"command": "on", "description": "Enable trading"},
+    {"command": "off", "description": "Pause trading"},
+    {"command": "positions", "description": "Show open positions"},
+    {"command": "stats", "description": "Today's trading stats"},
+    {"command": "bias", "description": "Current H4 bias all coins"},
+    {"command": "config", "description": "Show current config"},
+    {"command": "help", "description": "List all commands"},
+]
+
+
+# ── Core send ──
+
+async def send_message(text: str, parse_mode: str = "HTML"):
+    if not BOT_TOKEN or not CHAT_ID:
+        return
+    try:
+        async with aiohttp.ClientSession() as session:
+            await session.post(
+                f"{API_URL}/sendMessage",
+                json={
+                    "chat_id": CHAT_ID,
+                    "text": text,
+                    "parse_mode": parse_mode,
+                },
+                timeout=aiohttp.ClientTimeout(total=10),
+            )
+    except Exception as e:
+        logger.warning("Telegram send error: %s", e)
+
+
+async def register_commands():
+    if not BOT_TOKEN:
+        return
+    try:
+        async with aiohttp.ClientSession() as session:
+            await session.post(
+                f"{API_URL}/setMyCommands",
+                json={"commands": COMMANDS},
+                timeout=aiohttp.ClientTimeout(total=10),
+            )
+        logger.info("Telegram commands registered")
+    except Exception as e:
+        logger.warning("Register commands error: %s", e)
+
+
+# ── Command listener ──
+
+class CommandListener:
+    def __init__(self, bot):
+        self.bot = bot
+        self.last_update_id = 0
+        self.running = False
+
+    async def start(self):
+        await register_commands()
+        self.running = True
+        asyncio.create_task(self._poll_loop())
+        logger.info("Telegram command listener started")
+
+    async def stop(self):
+        self.running = False
+
+    async def _poll_loop(self):
+        while self.running:
+            try:
+                await self._poll()
+            except Exception as e:
+                logger.warning("Telegram poll error: %s", e)
+            await asyncio.sleep(2)
+
+    async def _poll(self):
+        if not BOT_TOKEN:
+            return
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{API_URL}/getUpdates",
+                    params={"offset": self.last_update_id + 1, "timeout": 5},
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    data = await resp.json()
+        except Exception:
+            return
+
+        for update in data.get("result", []):
+            self.last_update_id = update["update_id"]
+            msg = update.get("message", {})
+            text = msg.get("text", "")
+            chat_id = str(msg.get("chat", {}).get("id", ""))
+
+            if chat_id != CHAT_ID:
+                continue
+
+            if text.startswith("/"):
+                cmd = text.split()[0].replace("/", "").replace("@", " ").split()[0]
+                await self._handle_command(cmd)
+
+    async def _handle_command(self, cmd: str):
+        handlers = {
+            "start": self._cmd_help,
+            "help": self._cmd_help,
+            "status": self._cmd_status,
+            "on": self._cmd_on,
+            "off": self._cmd_off,
+            "positions": self._cmd_positions,
+            "stats": self._cmd_stats,
+            "bias": self._cmd_bias,
+            "config": self._cmd_config,
+        }
+        handler = handlers.get(cmd)
+        if handler:
+            await handler()
+
+    async def _cmd_help(self):
+        lines = ["📋 <b>FUTU Bot Commands</b>\n"]
+        for c in COMMANDS:
+            lines.append(f"/{c['command']} — {c['description']}")
+        await send_message("\n".join(lines))
+
+    async def _cmd_status(self):
+        bot = self.bot
+        open_pos = sum(1 for s in bot.states.values() if s.has_position)
+        status = "🟢 TRADING" if bot.running else "🔴 PAUSED"
+        text = (
+            f"<b>{status}</b>\n"
+            f"💰 Balance: <code>${bot.config.risk.account_balance:.2f}</code>\n"
+            f"📊 Symbols: {len(bot.symbols)}\n"
+            f"📈 Open positions: {open_pos}/{bot.config.risk.max_positions}\n"
+            f"📅 Today trades: {bot.risk.daily.trade_count}\n"
+            f"💵 Today PnL: <code>${bot.risk.daily.pnl:+.2f}</code>"
+        )
+        await send_message(text)
+
+    async def _cmd_on(self):
+        self.bot.running = True
+        await send_message("🟢 <b>Trading ENABLED</b>")
+
+    async def _cmd_off(self):
+        self.bot.running = False
+        await send_message("🔴 <b>Trading PAUSED</b>\nPositions still monitored.")
+
+    async def _cmd_positions(self):
+        open_syms = [s for s, st in self.bot.states.items() if st.has_position]
+        if not open_syms:
+            await send_message("📭 No open positions")
+            return
+
+        lines = ["📈 <b>Open Positions</b>\n"]
+        for sym in open_syms:
+            state = self.bot.states[sym]
+            orig = self.bot.exchange.config.symbol
+            self.bot.exchange.config.symbol = sym
+            try:
+                pos = await self.bot.exchange.get_position()
+                if pos:
+                    emoji = "🟢" if pos["side"] == "long" else "🔴"
+                    lines.append(
+                        f"{emoji} <b>{sym.split('/')[0]}</b> {pos['side'].upper()}\n"
+                        f"   Entry: <code>{pos['entry_price']:.2f}</code>\n"
+                        f"   Size: <code>{pos['size']}</code>\n"
+                        f"   uPnL: <code>${pos['unrealized_pnl']:+.2f}</code>\n"
+                        f"   Candles: {state.position_candle_count}"
+                    )
+            except Exception as e:
+                lines.append(f"⚠️ {sym.split('/')[0]}: error")
+            finally:
+                self.bot.exchange.config.symbol = orig
+        await send_message("\n".join(lines))
+
+    async def _cmd_stats(self):
+        d = self.bot.risk.daily
+        wr = (d.wins / d.trade_count * 100) if d.trade_count > 0 else 0
+        text = (
+            "📊 <b>Today's Stats</b>\n"
+            f"📈 Trades: {d.trade_count} | W/L: {d.wins}/{d.losses}\n"
+            f"🎯 Win Rate: <code>{wr:.1f}%</code>\n"
+            f"💵 PnL: <code>${d.pnl:+.2f}</code>\n"
+            f"📉 Total Loss: <code>${d.total_loss:.2f}</code>\n"
+            f"💰 Balance: <code>${self.bot.config.risk.account_balance:.2f}</code>\n"
+            f"❄️ Cooldown: {self.bot.risk.cooldown_remaining} candles"
+        )
+        await send_message(text)
+
+    async def _cmd_bias(self):
+        lines = ["🔄 <b>H4 Bias</b>\n"]
+        for sym in self.bot.symbols:
+            state = self.bot.states.get(sym)
+            if state:
+                emoji = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪"}.get(
+                    state.bias.value.upper(), "⚪"
+                )
+                lines.append(f"  {emoji} {sym.split('/')[0]}: {state.bias.value}")
+        await send_message("\n".join(lines))
+
+    async def _cmd_config(self):
+        cfg = self.bot.config
+        text = (
+            "⚙️ <b>Config</b>\n"
+            f"Leverage: {cfg.exchange.leverage}x\n"
+            f"Risk/trade: {cfg.risk.risk_per_trade_main*100:.0f}% / {cfg.risk.risk_per_trade_scalp*100:.0f}%\n"
+            f"Max daily loss: {cfg.risk.max_daily_loss_pct*100:.0f}%\n"
+            f"Max positions: {cfg.risk.max_positions}\n"
+            f"Top symbols: {cfg.risk.max_symbols}\n"
+            f"Cooldown: {cfg.risk.cooldown_candles} candles\n"
+            f"Min R:R: {cfg.risk.min_rr_trending}/{cfg.risk.min_rr_ranging}\n"
+            f"Main TF: {cfg.timeframe.main_tf} | HTF: {cfg.timeframe.htf}"
+        )
+        await send_message(text)
+
+
+# ── Notifications ──
+
+async def notify_startup(symbols: list[str], balance: float):
+    text = (
+        "🟢 <b>FUTU Bot Started</b>\n"
+        f"💰 Balance: <code>${balance:.2f}</code>\n"
+        f"📊 Symbols: {len(symbols)}\n"
+        f"🪙 {', '.join(s.split('/')[0] for s in symbols)}"
+    )
+    await send_message(text)
+
+
+async def notify_signal(symbol: str, side: str, entry: float, sl: float,
+                        tp: float, amount: float, rr: float, regime: str):
+    emoji = "🟢" if side == "buy" else "🔴"
+    text = (
+        f"{emoji} <b>NEW TRADE</b>\n"
+        f"🪙 <b>{symbol.split('/')[0]}</b> | {side.upper()} | {regime}\n"
+        f"📍 Entry: <code>{entry:.2f}</code>\n"
+        f"🎯 TP: <code>{tp:.2f}</code>\n"
+        f"🛡 SL: <code>{sl:.2f}</code>\n"
+        f"📦 Size: <code>{amount:.6f}</code>\n"
+        f"⚖️ R:R = <code>{rr:.2f}</code>"
+    )
+    await send_message(text)
+
+
+async def notify_close(symbol: str, pnl: float, reason: str, balance: float):
+    emoji = "✅" if pnl >= 0 else "❌"
+    text = (
+        f"{emoji} <b>TRADE CLOSED</b>\n"
+        f"🪙 <b>{symbol.split('/')[0]}</b>\n"
+        f"💵 PnL: <code>${pnl:+.2f}</code>\n"
+        f"📝 {reason}\n"
+        f"💰 Balance: <code>${balance:.2f}</code>"
+    )
+    await send_message(text)
+
+
+async def notify_daily_summary(wins: int, losses: int, pnl: float,
+                                balance: float, trade_count: int):
+    wr = (wins / trade_count * 100) if trade_count > 0 else 0
+    text = (
+        "📊 <b>Daily Summary</b>\n"
+        f"📈 Trades: {trade_count} | W/L: {wins}/{losses}\n"
+        f"🎯 Win Rate: <code>{wr:.1f}%</code>\n"
+        f"💵 PnL: <code>${pnl:+.2f}</code>\n"
+        f"💰 Balance: <code>${balance:.2f}</code>"
+    )
+    await send_message(text)
+
+
+async def notify_error(error: str):
+    text = f"⚠️ <b>ERROR</b>\n<code>{error[:500]}</code>"
+    await send_message(text)
+
+
+async def notify_bias_update(biases: dict[str, str]):
+    lines = ["🔄 <b>H4 Bias Update</b>"]
+    for sym, bias in biases.items():
+        emoji = {"bullish": "🟢", "bearish": "🔴", "neutral": "⚪"}.get(bias, "⚪")
+        lines.append(f"  {emoji} {sym.split('/')[0]}: {bias}")
+    await send_message("\n".join(lines))
+
+
+async def notify_heartbeat(symbols_scanned: int, signals_found: int,
+                           open_positions: int, balance: float):
+    now = datetime.now(timezone.utc).strftime("%H:%M UTC")
+    text = (
+        f"💓 <b>Scan {now}</b>\n"
+        f"🔍 Scanned: {symbols_scanned} coins\n"
+        f"📡 Signals: {signals_found}\n"
+        f"📈 Positions: {open_positions}\n"
+        f"💰 Balance: <code>${balance:.2f}</code>"
+    )
+    await send_message(text)
