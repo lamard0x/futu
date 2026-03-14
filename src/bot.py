@@ -14,6 +14,8 @@ from src.strategy import (
 from src.risk import RiskManager
 from src import telegram
 from src.telegram import CommandListener
+from src.funding import FundingArbitrage
+from src.webhook import WebhookServer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,6 +66,10 @@ class FutuBot:
         await telegram.notify_startup(self.symbols, self.config.risk.account_balance)
         self.cmd_listener = CommandListener(self)
         await self.cmd_listener.start()
+        self.funding = FundingArbitrage(self.config, self.exchange, self.risk)
+        asyncio.create_task(self.funding.run())
+        self.webhook = WebhookServer(self.config, self)
+        await self.webhook.start()
         self.running = True
 
         try:
@@ -75,6 +81,8 @@ class FutuBot:
             await telegram.notify_error(str(e))
         finally:
             await self.cmd_listener.stop()
+            await self.funding.stop()
+            await self.webhook.stop()
             await self.exchange.disconnect()
 
     async def _refresh_symbols(self):
@@ -289,11 +297,12 @@ class FutuBot:
         try:
             position = await self.exchange.get_position()
             if position is None:
+                real_pnl = await self.exchange.get_closed_pnl(symbol)
                 state.has_position = False
-                self.risk.on_trade_closed(0.0)
-                logger.info("%s position closed (TP/SL hit)", symbol.split("/")[0])
+                self.risk.on_trade_closed(real_pnl)
+                logger.info("%s position closed (TP/SL hit) PnL: $%.2f", symbol.split("/")[0], real_pnl)
                 await telegram.notify_close(
-                    symbol, 0.0, "TP/SL hit", self.config.risk.account_balance,
+                    symbol, real_pnl, "TP/SL hit", self.config.risk.account_balance,
                 )
                 return
 

@@ -84,6 +84,23 @@ class RiskConfig:
 
 
 @dataclass
+class FundingConfig:
+    enabled: bool = False
+    min_rate: float = 0.0001
+    max_position_pct: float = 0.05
+    check_interval: int = 3600
+    symbols_to_scan: int = 20
+
+
+@dataclass
+class WebhookConfig:
+    enabled: bool = False
+    host: str = "0.0.0.0"
+    port: int = 8080
+    secret: str = ""
+
+
+@dataclass
 class TimeframeConfig:
     htf: str = "4h"
     main_tf: str = "15m"
@@ -98,6 +115,8 @@ class Config:
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     timeframe: TimeframeConfig = field(default_factory=TimeframeConfig)
+    funding: FundingConfig = field(default_factory=FundingConfig)
+    webhook: WebhookConfig = field(default_factory=WebhookConfig)
 
     def __post_init__(self):
         self._load_env()
@@ -110,6 +129,9 @@ class Config:
         self.exchange.symbol = os.getenv("TRADING_SYMBOL", "BTC/USDT:USDT")
         self.exchange.leverage = int(os.getenv("TRADING_LEVERAGE", "10"))
         self.risk.account_balance = float(os.getenv("ACCOUNT_BALANCE", "300"))
+        self.webhook.secret = os.getenv("WEBHOOK_SECRET", "")
+        self.funding.enabled = os.getenv("FUNDING_ENABLED", "false").lower() == "true"
+        self.webhook.enabled = os.getenv("WEBHOOK_ENABLED", "false").lower() == "true"
 
     def _load_overrides(self):
         if not OVERRIDE_PATH.exists():

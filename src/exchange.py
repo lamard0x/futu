@@ -219,6 +219,54 @@ class BybitExchange:
         await self.place_market_order(close_side, position["size"])
         logger.info("Position closed")
 
+    async def get_closed_pnl(self, symbol: str | None = None) -> float:
+        sym = symbol or self.config.symbol
+        raw = sym.replace("/", "").replace(":USDT", "")
+        try:
+            result = await self.exchange.private_get_v5_position_closed_pnl({
+                "category": "linear",
+                "symbol": raw,
+                "limit": 1,
+            })
+            items = result.get("result", {}).get("list", [])
+            if items:
+                return float(items[0].get("closedPnl", 0))
+        except Exception as e:
+            logger.warning("Get closed PnL error: %s", e)
+        return 0.0
+
+    async def fetch_funding_rate(self, symbol: str) -> dict:
+        try:
+            funding = await self.exchange.fetch_funding_rate(symbol)
+            return {
+                "symbol": symbol,
+                "rate": float(funding.get("fundingRate", 0)),
+                "next_time": funding.get("fundingDatetime", ""),
+                "next_timestamp": funding.get("fundingTimestamp", 0),
+            }
+        except Exception as e:
+            logger.warning("Funding rate error %s: %s", symbol, e)
+            return {"symbol": symbol, "rate": 0, "next_time": "", "next_timestamp": 0}
+
+    async def fetch_all_funding_rates(self, limit: int = 20) -> list[dict]:
+        try:
+            tickers = await self.exchange.fetch_tickers()
+            symbols = [
+                s for s in tickers
+                if s.endswith(":USDT") and "/USDT" in s
+            ]
+            rates = []
+            for sym in symbols[:limit]:
+                r = await self.fetch_funding_rate(sym)
+                if abs(r["rate"]) > 0:
+                    rates.append(r)
+                await asyncio.sleep(0.1)
+            rates.sort(key=lambda x: abs(x["rate"]), reverse=True)
+            return rates
+        except Exception as e:
+            logger.warning("Fetch all funding rates error: %s", e)
+            return []
+
     async def get_ticker(self) -> dict:
         ticker = await self.exchange.fetch_ticker(self.config.symbol)
         return {
