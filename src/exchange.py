@@ -328,13 +328,28 @@ class Exchange:
         }
 
     async def get_top_volume_symbols(self, limit: int = 10) -> list[str]:
-        await self.rate_limiter.acquire("fetch_tickers")
-        tickers = await retry_api_call(self.exchange.fetch_tickers)
-        perp_tickers = [
-            (symbol, float(t.get("quoteVolume") or 0))
-            for symbol, t in tickers.items()
-            if symbol.endswith(":USDT") and "/USDT" in symbol
-        ]
+        # Use live public API for accurate volume data
+        try:
+            live_ex = ccxt.okx({"options": {"defaultType": "swap"}}) if self.exchange_name == "okx" else ccxt.bybit({"options": {"defaultType": "swap"}})
+            try:
+                await self.rate_limiter.acquire("fetch_tickers")
+                tickers = await retry_api_call(live_ex.fetch_tickers)
+            finally:
+                await live_ex.close()
+        except Exception:
+            await self.rate_limiter.acquire("fetch_tickers")
+            tickers = await retry_api_call(self.exchange.fetch_tickers)
+
+        perp_tickers = []
+        for symbol, t in tickers.items():
+            if not (symbol.endswith(":USDT") and "/USDT" in symbol):
+                continue
+            qv = float(t.get("quoteVolume") or 0)
+            if qv == 0:
+                bv = float(t.get("baseVolume") or 0)
+                last = float(t.get("last") or 0)
+                qv = bv * last
+            perp_tickers.append((symbol, qv))
         perp_tickers.sort(key=lambda x: x[1], reverse=True)
         top = [symbol for symbol, vol in perp_tickers[:limit]]
         logger.info("Top %d volume: %s", limit, [s.split("/")[0] for s in top])
