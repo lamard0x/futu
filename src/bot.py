@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 
 from src.config import Config
-from src.exchange import BybitExchange
+from src.exchange import Exchange
 from src.indicators import compute_all
 from src.strategy import (
     scan_main, scan_alert, detect_htf_bias,
@@ -41,7 +41,7 @@ class SymbolState:
 class FutuBot:
     def __init__(self):
         self.config = Config()
-        self.exchange = BybitExchange(self.config.exchange)
+        self.exchange = Exchange(self.config.exchange)
         self.risk = RiskManager(config=self.config.risk)
         self.symbols: list[str] = []
         self.states: dict[str, SymbolState] = {}
@@ -323,17 +323,34 @@ class FutuBot:
                 )
                 return
 
-            # Trailing SL
+            # Trailing SL with activation price
+            # Only activate trailing after position is profitable (>0.3%)
             entry = position["entry_price"]
-            pnl_pct = position["unrealized_pnl"] / (entry * position["size"]) if position["size"] > 0 else 0
+            notional = entry * position["size"] if position["size"] > 0 else 1
+            pnl_pct = position["unrealized_pnl"] / notional
+
             if pnl_pct > 0.003:
                 candles = await self.exchange.fetch_candles(self.config.timeframe.main_tf, 30, symbol=symbol)
                 df = compute_all(candles, self.config.indicators)
                 row = df.iloc[-1]
-                if position["side"] == "long" and row["chandelier_long"] > entry:
-                    await self.exchange.update_tp_sl(sl_price=row["chandelier_long"])
-                elif position["side"] == "short" and row["chandelier_short"] < entry:
-                    await self.exchange.update_tp_sl(sl_price=row["chandelier_short"])
+                new_sl = None
+
+                if position["side"] == "long":
+                    chandelier = row["chandelier_long"]
+                    # Only ratchet up, never down
+                    if chandelier > entry:
+                        new_sl = chandelier
+                elif position["side"] == "short":
+                    chandelier = row["chandelier_short"]
+                    if chandelier < entry:
+                        new_sl = chandelier
+
+                if new_sl is not None:
+                    logger.info(
+                        "%s trailing SL activated: %.2f (pnl: %.2f%%)",
+                        symbol.split("/")[0], new_sl, pnl_pct * 100,
+                    )
+                    await self.exchange.update_tp_sl(sl_price=new_sl)
         finally:
             self.exchange.config.symbol = orig_symbol
 

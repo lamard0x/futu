@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone
 
 from src.config import Config
-from src.exchange import BybitExchange
+from src.exchange import Exchange
 from src.risk import RiskManager
 from src import telegram
 
@@ -13,7 +13,7 @@ FUNDING_HOURS = [0, 8, 16]  # Bybit funding settlement hours (UTC)
 
 
 class FundingArbitrage:
-    def __init__(self, config: Config, exchange: BybitExchange, risk: RiskManager):
+    def __init__(self, config: Config, exchange: Exchange, risk: RiskManager):
         self.config = config
         self.exchange = exchange
         self.risk = risk

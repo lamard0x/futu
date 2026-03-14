@@ -11,8 +11,10 @@ OVERRIDE_PATH = Path(__file__).parent.parent / "data" / "config_overrides.json"
 
 @dataclass
 class ExchangeConfig:
+    exchange_name: str = "bybit"
     api_key: str = ""
     api_secret: str = ""
+    passphrase: str = ""
     testnet: str = "true"
     symbol: str = "BTC/USDT:USDT"
     leverage: int = 10
@@ -123,9 +125,11 @@ class Config:
         self._load_overrides()
 
     def _load_env(self):
-        self.exchange.api_key = os.getenv("BYBIT_API_KEY", "")
-        self.exchange.api_secret = os.getenv("BYBIT_API_SECRET", "")
-        self.exchange.testnet = os.getenv("BYBIT_TESTNET", "true").lower()
+        self.exchange.exchange_name = os.getenv("EXCHANGE", "bybit").lower()
+        self.exchange.api_key = os.getenv("API_KEY", os.getenv("BYBIT_API_KEY", ""))
+        self.exchange.api_secret = os.getenv("API_SECRET", os.getenv("BYBIT_API_SECRET", ""))
+        self.exchange.passphrase = os.getenv("API_PASSPHRASE", "")
+        self.exchange.testnet = os.getenv("TESTNET", os.getenv("BYBIT_TESTNET", "true")).lower()
         self.exchange.symbol = os.getenv("TRADING_SYMBOL", "BTC/USDT:USDT")
         self.exchange.leverage = int(os.getenv("TRADING_LEVERAGE", "10"))
         self.risk.account_balance = float(os.getenv("ACCOUNT_BALANCE", "300"))

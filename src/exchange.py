@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 from src.config import ExchangeConfig
+from src.rate_limiter import RateLimiter
+from src.error_handler import retry_api_call
 
 logger = logging.getLogger("futu.exchange")
 
@@ -20,12 +22,30 @@ class OrderResult:
     raw: dict
 
 
-class BybitExchange:
+class Exchange:
     def __init__(self, config: ExchangeConfig):
         self.config = config
-        self.exchange: Optional[ccxt.bybit] = None
+        self.exchange: Optional[ccxt.Exchange] = None
+        self.exchange_name = config.exchange_name
+        self.rate_limiter = RateLimiter()
 
     async def connect(self):
+        if self.exchange_name == "okx":
+            await self._connect_okx()
+        else:
+            await self._connect_bybit()
+
+        await self.exchange.load_markets()
+        await self._setup_leverage()
+
+        mode = self._get_mode()
+        logger.info(
+            "Connected to %s %s | %s | leverage %dx",
+            self.exchange_name.upper(), mode,
+            self.config.symbol, self.config.leverage,
+        )
+
+    async def _connect_bybit(self):
         self.exchange = ccxt.bybit({
             "apiKey": self.config.api_key,
             "secret": self.config.api_secret,
@@ -36,32 +56,39 @@ class BybitExchange:
                 "public": "https://api-demo.bybit.com",
                 "private": "https://api-demo.bybit.com",
             }
-        elif self.config.testnet:
+        elif self.config.testnet == "true":
             self.exchange.set_sandbox_mode(True)
-        await self.exchange.load_markets()
-        await self._setup_leverage()
-        mode = "demo" if self.config.testnet == "demo" else ("testnet" if self.config.testnet else "live")
-        logger.info(
-            "Connected to Bybit %s | %s | leverage %dx",
-            mode,
-            self.config.symbol,
-            self.config.leverage,
-        )
+
+    async def _connect_okx(self):
+        opts = {
+            "apiKey": self.config.api_key,
+            "secret": self.config.api_secret,
+            "password": self.config.passphrase,
+            "options": {"defaultType": "swap"},
+        }
+        self.exchange = ccxt.okx(opts)
+        if self.config.testnet in ("demo", "true"):
+            self.exchange.set_sandbox_mode(True)
+
+    def _get_mode(self) -> str:
+        if self.config.testnet == "demo":
+            return "demo"
+        if self.config.testnet == "true":
+            return "testnet"
+        return "live"
 
     async def _setup_leverage(self):
         try:
             await self.exchange.set_leverage(
-                self.config.leverage,
-                self.config.symbol,
+                self.config.leverage, self.config.symbol,
             )
         except ccxt.ExchangeError as e:
-            if "leverage not modified" not in str(e).lower():
+            if "not modified" not in str(e).lower():
                 logger.warning("Set leverage warning: %s", e)
 
         try:
             await self.exchange.set_margin_mode(
-                self.config.margin_mode,
-                self.config.symbol,
+                self.config.margin_mode, self.config.symbol,
             )
         except ccxt.ExchangeError as e:
             if "not modified" not in str(e).lower():
@@ -69,7 +96,8 @@ class BybitExchange:
 
     async def fetch_candles(self, timeframe: str, limit: int = 200, symbol: str | None = None) -> list[dict]:
         sym = symbol or self.config.symbol
-        ohlcv = await self.exchange.fetch_ohlcv(sym, timeframe, limit=limit)
+        await self.rate_limiter.acquire("fetch_ohlcv")
+        ohlcv = await retry_api_call(self.exchange.fetch_ohlcv, sym, timeframe, limit=limit)
         return [
             {
                 "timestamp": c[0],
@@ -83,11 +111,13 @@ class BybitExchange:
         ]
 
     async def get_balance(self) -> float:
-        balance = await self.exchange.fetch_balance()
+        await self.rate_limiter.acquire("fetch_balance")
+        balance = await retry_api_call(self.exchange.fetch_balance)
         return float(balance.get("USDT", {}).get("free", 0))
 
     async def get_position(self) -> Optional[dict]:
-        positions = await self.exchange.fetch_positions([self.config.symbol])
+        await self.rate_limiter.acquire("fetch_positions")
+        positions = await retry_api_call(self.exchange.fetch_positions, [self.config.symbol])
         for pos in positions:
             size = float(pos.get("contracts", 0))
             if size > 0:
@@ -102,12 +132,8 @@ class BybitExchange:
         return None
 
     async def place_limit_order(
-        self,
-        side: str,
-        amount: float,
-        price: float,
-        tp_price: Optional[float] = None,
-        sl_price: Optional[float] = None,
+        self, side: str, amount: float, price: float,
+        tp_price: Optional[float] = None, sl_price: Optional[float] = None,
     ) -> OrderResult:
         params = {"timeInForce": "PostOnly"}
         if tp_price is not None:
@@ -115,13 +141,11 @@ class BybitExchange:
         if sl_price is not None:
             params["stopLoss"] = sl_price
 
-        order = await self.exchange.create_order(
-            symbol=self.config.symbol,
-            type="limit",
-            side=side,
-            amount=amount,
-            price=price,
-            params=params,
+        await self.rate_limiter.acquire("create_order")
+        order = await retry_api_call(
+            self.exchange.create_order,
+            symbol=self.config.symbol, type="limit",
+            side=side, amount=amount, price=price, params=params,
         )
         logger.info(
             "Order placed: %s %s %.4f @ %.2f | TP=%.2f SL=%.2f",
@@ -129,21 +153,14 @@ class BybitExchange:
             tp_price or 0, sl_price or 0,
         )
         return OrderResult(
-            order_id=order["id"],
-            symbol=order["symbol"],
-            side=side,
-            price=price,
-            amount=amount,
-            status=order["status"],
-            raw=order,
+            order_id=order["id"], symbol=order["symbol"],
+            side=side, price=price, amount=amount,
+            status=order["status"], raw=order,
         )
 
     async def place_market_order(
-        self,
-        side: str,
-        amount: float,
-        tp_price: Optional[float] = None,
-        sl_price: Optional[float] = None,
+        self, side: str, amount: float,
+        tp_price: Optional[float] = None, sl_price: Optional[float] = None,
     ) -> OrderResult:
         params = {}
         if tp_price is not None:
@@ -151,46 +168,28 @@ class BybitExchange:
         if sl_price is not None:
             params["stopLoss"] = sl_price
 
-        order = await self.exchange.create_order(
-            symbol=self.config.symbol,
-            type="market",
-            side=side,
-            amount=amount,
-            params=params,
+        await self.rate_limiter.acquire("create_order")
+        order = await retry_api_call(
+            self.exchange.create_order,
+            symbol=self.config.symbol, type="market",
+            side=side, amount=amount, params=params,
         )
         logger.info("Market order: %s %s %.4f", side, self.config.symbol, amount)
         return OrderResult(
-            order_id=order["id"],
-            symbol=order["symbol"],
-            side=side,
-            price=float(order.get("average", 0)),
-            amount=amount,
-            status=order["status"],
-            raw=order,
+            order_id=order["id"], symbol=order["symbol"],
+            side=side, price=float(order.get("average", 0)),
+            amount=amount, status=order["status"], raw=order,
         )
 
-    async def set_trailing_stop(self, trailing_distance: float):
-        try:
-            position = await self.get_position()
-            if position is None:
-                return
-            await self.exchange.set_position_mode(False, self.config.symbol)
-            side = "Buy" if position["side"] == "long" else "Sell"
-            await self.exchange.private_post_v5_position_trading_stop({
-                "category": "linear",
-                "symbol": self.config.symbol.replace("/", "").replace(":USDT", ""),
-                "trailingStop": str(trailing_distance),
-                "positionIdx": 0,
-            })
-            logger.info("Trailing stop set: %.2f", trailing_distance)
-        except ccxt.ExchangeError as e:
-            logger.warning("Trailing stop error: %s", e)
-
     async def update_tp_sl(
-        self,
-        tp_price: Optional[float] = None,
-        sl_price: Optional[float] = None,
+        self, tp_price: Optional[float] = None, sl_price: Optional[float] = None,
     ):
+        if self.exchange_name == "bybit":
+            await self._update_tp_sl_bybit(tp_price, sl_price)
+        else:
+            await self._update_tp_sl_generic(tp_price, sl_price)
+
+    async def _update_tp_sl_bybit(self, tp_price, sl_price):
         params = {"category": "linear", "positionIdx": 0}
         raw_symbol = self.config.symbol.replace("/", "").replace(":USDT", "")
         params["symbol"] = raw_symbol
@@ -200,6 +199,53 @@ class BybitExchange:
             params["stopLoss"] = str(sl_price)
         try:
             await self.exchange.private_post_v5_position_trading_stop(params)
+            logger.info("TP/SL updated: TP=%.2f SL=%.2f", tp_price or 0, sl_price or 0)
+        except ccxt.ExchangeError as e:
+            logger.warning("Update TP/SL error: %s", e)
+
+    async def _update_tp_sl_generic(self, tp_price, sl_price):
+        try:
+            position = await self.get_position()
+            if position is None:
+                return
+            close_side = "sell" if position["side"] == "long" else "buy"
+            await self.rate_limiter.acquire("cancel_all_orders")
+            await self.exchange.cancel_all_orders(self.config.symbol)
+
+            # Try OCO (one-cancels-other) first
+            if tp_price is not None and sl_price is not None:
+                try:
+                    await self.rate_limiter.acquire("create_order")
+                    await self.exchange.create_order(
+                        symbol=self.config.symbol, type="oco",
+                        side=close_side, amount=position["size"],
+                        price=tp_price,
+                        params={
+                            "stopPrice": sl_price,
+                            "reduceOnly": True,
+                        },
+                    )
+                    logger.info("OCO order set: TP=%.2f SL=%.2f", tp_price, sl_price)
+                    return
+                except Exception:
+                    pass  # Fallback to separate orders
+
+            if sl_price is not None:
+                await self.rate_limiter.acquire("create_order")
+                await self.exchange.create_order(
+                    symbol=self.config.symbol, type="stop",
+                    side=close_side, amount=position["size"],
+                    price=sl_price,
+                    params={"stopPrice": sl_price, "reduceOnly": True},
+                )
+            if tp_price is not None:
+                await self.rate_limiter.acquire("create_order")
+                await self.exchange.create_order(
+                    symbol=self.config.symbol, type="limit",
+                    side=close_side, amount=position["size"],
+                    price=tp_price,
+                    params={"reduceOnly": True},
+                )
             logger.info("TP/SL updated: TP=%.2f SL=%.2f", tp_price or 0, sl_price or 0)
         except ccxt.ExchangeError as e:
             logger.warning("Update TP/SL error: %s", e)
@@ -221,16 +267,20 @@ class BybitExchange:
 
     async def get_closed_pnl(self, symbol: str | None = None) -> float:
         sym = symbol or self.config.symbol
-        raw = sym.replace("/", "").replace(":USDT", "")
         try:
-            result = await self.exchange.private_get_v5_position_closed_pnl({
-                "category": "linear",
-                "symbol": raw,
-                "limit": 1,
-            })
-            items = result.get("result", {}).get("list", [])
-            if items:
-                return float(items[0].get("closedPnl", 0))
+            if self.exchange_name == "bybit":
+                raw = sym.replace("/", "").replace(":USDT", "")
+                result = await self.exchange.private_get_v5_position_closed_pnl({
+                    "category": "linear", "symbol": raw, "limit": 1,
+                })
+                items = result.get("result", {}).get("list", [])
+                if items:
+                    return float(items[0].get("closedPnl", 0))
+            else:
+                trades = await self.exchange.fetch_my_trades(sym, limit=5)
+                if trades:
+                    pnl = sum(float(t.get("info", {}).get("pnl", 0)) for t in trades)
+                    return pnl
         except Exception as e:
             logger.warning("Get closed PnL error: %s", e)
         return 0.0
@@ -268,7 +318,8 @@ class BybitExchange:
             return []
 
     async def get_ticker(self) -> dict:
-        ticker = await self.exchange.fetch_ticker(self.config.symbol)
+        await self.rate_limiter.acquire("fetch_ticker")
+        ticker = await retry_api_call(self.exchange.fetch_ticker, self.config.symbol)
         return {
             "bid": float(ticker.get("bid", 0)),
             "ask": float(ticker.get("ask", 0)),
@@ -277,9 +328,10 @@ class BybitExchange:
         }
 
     async def get_top_volume_symbols(self, limit: int = 10) -> list[str]:
-        tickers = await self.exchange.fetch_tickers()
+        await self.rate_limiter.acquire("fetch_tickers")
+        tickers = await retry_api_call(self.exchange.fetch_tickers)
         perp_tickers = [
-            (symbol, float(t.get("quoteVolume", 0)))
+            (symbol, float(t.get("quoteVolume") or 0))
             for symbol, t in tickers.items()
             if symbol.endswith(":USDT") and "/USDT" in symbol
         ]
@@ -291,14 +343,14 @@ class BybitExchange:
     async def setup_symbol(self, symbol: str):
         try:
             await self.exchange.set_leverage(self.config.leverage, symbol)
-        except ccxt.ExchangeError:
+        except Exception:
             pass
         try:
             await self.exchange.set_margin_mode(self.config.margin_mode, symbol)
-        except ccxt.ExchangeError:
+        except Exception:
             pass
 
     async def disconnect(self):
         if self.exchange:
             await self.exchange.close()
-            logger.info("Disconnected from Bybit")
+            logger.info("Disconnected from %s", self.exchange_name.upper())
