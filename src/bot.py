@@ -16,6 +16,7 @@ from src import telegram
 from src.telegram import CommandListener
 from src.funding import FundingArbitrage
 from src.webhook import WebhookServer
+from src.chart import generate_chart
 
 logging.basicConfig(
     level=logging.INFO,
@@ -275,9 +276,26 @@ class FutuBot:
                 self.states[symbol].position_candle_count = 0
                 self.risk.on_trade_opened()
                 logger.info("Trade opened: %s %s", symbol.split("/")[0], order.order_id)
+                try:
+                    candles = await self.exchange.fetch_candles(
+                        self.config.timeframe.main_tf, 100, symbol=symbol,
+                    )
+                    chart_bytes = generate_chart(
+                        candles, self.config.indicators,
+                        symbol=symbol.split("/")[0] + "/USDT",
+                        entries=[{
+                            "timestamp": None, "type": "entry",
+                            "side": side, "price": signal.entry_price,
+                            "sl": signal.sl_price, "tp": tp_target,
+                        }],
+                        regime=signal.regime.value,
+                        bias=self.states.get(symbol, SymbolState(symbol=symbol)).bias.value,
+                    )
+                except Exception:
+                    chart_bytes = None
                 await telegram.notify_signal(
                     symbol, side, signal.entry_price, signal.sl_price,
-                    tp_target, amount, rr, signal.regime.value,
+                    tp_target, amount, rr, signal.regime.value, chart_bytes,
                 )
         finally:
             self.exchange.config.symbol = orig_symbol

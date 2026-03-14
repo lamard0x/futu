@@ -17,6 +17,7 @@ COMMANDS = [
     {"command": "positions", "description": "Show open positions"},
     {"command": "stats", "description": "Today's trading stats"},
     {"command": "bias", "description": "Current H4 bias all coins"},
+    {"command": "chart", "description": "Chart with indicators (e.g. /chart BTC)"},
     {"command": "config", "description": "Show current config"},
     {"command": "help", "description": "List all commands"},
 ]
@@ -40,6 +41,26 @@ async def send_message(text: str, parse_mode: str = "HTML"):
             )
     except Exception as e:
         logger.warning("Telegram send error: %s", e)
+
+
+async def send_photo(photo_bytes: bytes, caption: str = ""):
+    if not BOT_TOKEN or not CHAT_ID:
+        return
+    try:
+        data = aiohttp.FormData()
+        data.add_field("chat_id", CHAT_ID)
+        data.add_field("photo", photo_bytes, filename="chart.png", content_type="image/png")
+        if caption:
+            data.add_field("caption", caption)
+            data.add_field("parse_mode", "HTML")
+        async with aiohttp.ClientSession() as session:
+            await session.post(
+                f"{API_URL}/sendPhoto",
+                data=data,
+                timeout=aiohttp.ClientTimeout(total=30),
+            )
+    except Exception as e:
+        logger.warning("Telegram send photo error: %s", e)
 
 
 async def register_commands():
@@ -106,10 +127,15 @@ class CommandListener:
                 continue
 
             if text.startswith("/"):
-                cmd = text.split()[0].replace("/", "").replace("@", " ").split()[0]
-                await self._handle_command(cmd)
+                parts = text.split()
+                cmd = parts[0].replace("/", "").replace("@", " ").split()[0]
+                args = parts[1:] if len(parts) > 1 else []
+                await self._handle_command(cmd, args)
 
-    async def _handle_command(self, cmd: str):
+    async def _handle_command(self, cmd: str, args: list[str] = None):
+        if cmd == "chart":
+            await self._cmd_chart(args or [])
+            return
         handlers = {
             "start": self._cmd_help,
             "help": self._cmd_help,
@@ -221,6 +247,57 @@ class CommandListener:
         )
         await send_message(text)
 
+    async def _cmd_chart(self, args: list[str]):
+        from src.chart import generate_chart
+        from src.indicators import compute_all
+
+        # Find symbol
+        query = args[0].upper() if args else ""
+        symbol = None
+        for sym in self.bot.symbols:
+            if query and query in sym.split("/")[0]:
+                symbol = sym
+                break
+        if symbol is None:
+            symbol = self.bot.symbols[0] if self.bot.symbols else None
+        if symbol is None:
+            await send_message("⚠️ No symbols available")
+            return
+
+        await send_message(f"📊 Generating chart for {symbol.split('/')[0]}...")
+
+        try:
+            candles = await self.bot.exchange.fetch_candles(
+                self.bot.config.timeframe.main_tf, 100, symbol=symbol,
+            )
+            if len(candles) < 50:
+                await send_message("⚠️ Not enough data")
+                return
+
+            state = self.bot.states.get(symbol)
+            regime_str = ""
+            bias_str = state.bias.value if state else ""
+
+            df = compute_all(candles, self.bot.config.indicators)
+            last = df.iloc[-1]
+            adx = last.get("adx", 0)
+            regime_str = "trending" if adx >= self.bot.config.strategy.adx_trending else "ranging"
+
+            chart_bytes = generate_chart(
+                candles, self.bot.config.indicators,
+                symbol=symbol.split("/")[0] + "/USDT",
+                regime=regime_str, bias=bias_str,
+            )
+            caption = (
+                f"📊 <b>{symbol.split('/')[0]}</b> | 15m\n"
+                f"💰 ${last['close']:,.1f} | {regime_str} | HTF: {bias_str}\n"
+                f"RSI: {last.get('rsi', 0):.0f} | ADX: {adx:.0f}"
+            )
+            await send_photo(chart_bytes, caption)
+        except Exception as e:
+            logger.warning("Chart error: %s", e)
+            await send_message(f"⚠️ Chart error: {e}")
+
 
 # ── Notifications ──
 
@@ -235,7 +312,8 @@ async def notify_startup(symbols: list[str], balance: float):
 
 
 async def notify_signal(symbol: str, side: str, entry: float, sl: float,
-                        tp: float, amount: float, rr: float, regime: str):
+                        tp: float, amount: float, rr: float, regime: str,
+                        chart_bytes: bytes | None = None):
     emoji = "🟢" if side == "buy" else "🔴"
     text = (
         f"{emoji} <b>NEW TRADE</b>\n"
@@ -246,7 +324,10 @@ async def notify_signal(symbol: str, side: str, entry: float, sl: float,
         f"📦 Size: <code>{amount:.6f}</code>\n"
         f"⚖️ R:R = <code>{rr:.2f}</code>"
     )
-    await send_message(text)
+    if chart_bytes:
+        await send_photo(chart_bytes, text)
+    else:
+        await send_message(text)
 
 
 async def notify_close(symbol: str, pnl: float, reason: str, balance: float):
