@@ -1,0 +1,171 @@
+//@version=5
+indicator("FUTU Scalper v1", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ── Inputs ──
+ema_fast_len  = input.int(9, "EMA Fast")
+ema_mid_len   = input.int(21, "EMA Mid")
+ema_slow_len  = input.int(50, "EMA Slow")
+rsi_period    = input.int(10, "RSI Period")
+bb_period     = input.int(20, "BB Period")
+bb_std        = input.float(2.0, "BB StdDev")
+adx_period    = input.int(14, "ADX Period")
+atr_period    = input.int(14, "ATR Period")
+chand_period  = input.int(22, "Chandelier Period")
+chand_mult    = input.float(3.0, "Chandelier Mult")
+vol_sma_len   = input.int(20, "Volume SMA")
+
+adx_threshold = input.float(25.0, "ADX Trending Threshold")
+rsi_oversold  = input.float(40.0, "RSI Oversold")
+rsi_overbought = input.float(60.0, "RSI Overbought")
+vol_trend_mult = input.float(1.2, "Volume Trend Mult")
+vol_range_mult = input.float(0.8, "Volume Range Mult")
+bb_touch_pct   = input.float(0.5, "BB Touch %")
+
+tp1_atr_mult  = input.float(1.5, "TP1 ATR Mult")
+tp2_atr_mult  = input.float(2.5, "TP2 ATR Mult")
+sl_trend_mult = input.float(1.5, "SL Trending ATR Mult")
+sl_range_mult = input.float(1.0, "SL Ranging ATR Mult")
+
+show_signals  = input.bool(true, "Show Entry Signals")
+show_tp_sl    = input.bool(true, "Show TP/SL Levels")
+show_regime   = input.bool(true, "Show Regime Background")
+show_chandelier = input.bool(true, "Show Chandelier Exit")
+
+// ── EMAs ──
+ema9  = ta.ema(close, ema_fast_len)
+ema21 = ta.ema(close, ema_mid_len)
+ema50 = ta.ema(close, ema_slow_len)
+
+plot(ema9,  "EMA 9",  color=color.new(#ffeb3b, 20), linewidth=1)
+plot(ema21, "EMA 21", color=color.new(#ff9800, 20), linewidth=1)
+plot(ema50, "EMA 50", color=color.new(#2196f3, 20), linewidth=2)
+
+// ── Bollinger Bands ──
+bb_basis = ta.sma(close, bb_period)
+bb_dev   = bb_std * ta.stdev(close, bb_period)
+bb_upper = bb_basis + bb_dev
+bb_lower = bb_basis - bb_dev
+
+p_bbu = plot(bb_upper, "BB Upper", color=color.new(#9c27b0, 60), linewidth=1)
+p_bbl = plot(bb_lower, "BB Lower", color=color.new(#9c27b0, 60), linewidth=1)
+fill(p_bbu, p_bbl, color=color.new(#9c27b0, 92))
+
+// ── RSI ──
+rsi_val = ta.rsi(close, rsi_period)
+
+// ── ADX ──
+[di_plus, di_minus, adx_val] = ta.dmi(adx_period, adx_period)
+
+// ── ATR ──
+atr_val = ta.atr(atr_period)
+
+// ── Chandelier Exit ──
+highest_high = ta.highest(high, chand_period)
+lowest_low   = ta.lowest(low, chand_period)
+chand_atr    = ta.atr(chand_period)
+chand_long   = highest_high - chand_mult * chand_atr
+chand_short  = lowest_low + chand_mult * chand_atr
+
+plot(show_chandelier ? chand_long : na,  "Chandelier Long",  color=color.new(#ff6600, 40), linewidth=1, style=plot.style_stepline)
+plot(show_chandelier ? chand_short : na, "Chandelier Short", color=color.new(#ff6600, 40), linewidth=1, style=plot.style_stepline)
+
+// ── Volume ──
+vol_sma = ta.sma(volume, vol_sma_len)
+
+// ── Regime Detection ──
+is_trending = adx_val >= adx_threshold
+is_ranging  = not is_trending
+
+// ── HTF Bias (H4) ──
+htf_ema9  = request.security(syminfo.tickerid, "240", ta.ema(close, ema_fast_len))
+htf_ema21 = request.security(syminfo.tickerid, "240", ta.ema(close, ema_mid_len))
+htf_ema50 = request.security(syminfo.tickerid, "240", ta.ema(close, ema_slow_len))
+htf_adx   = request.security(syminfo.tickerid, "240", ta.dmi(adx_period, adx_period)[2])
+
+htf_bullish = htf_ema9 > htf_ema21 and htf_ema21 > htf_ema50 and htf_adx > 20
+htf_bearish = htf_ema9 < htf_ema21 and htf_ema21 < htf_ema50 and htf_adx > 20
+
+// ── Candle Body Ratio ──
+body = math.abs(close - open)
+range_hl = high - low
+body_ratio = range_hl > 0 ? body / range_hl : 0
+
+// ── Trending Entry Conditions ──
+near_ema9 = math.abs(close - ema9) / close < 0.005
+pullback_to_ema = close > ema9 and low <= ema9 * 1.005
+
+trend_long = is_trending and htf_bullish and ema9 > ema21 and ema21 > ema50 and rsi_val > 50 and (near_ema9 or pullback_to_ema) and volume > vol_sma * vol_trend_mult and body_ratio > 0.3
+
+near_ema9_short = math.abs(close - ema9) / close < 0.005
+pullback_short = close < ema9 and high >= ema9 * 0.995
+
+trend_short = is_trending and htf_bearish and ema9 < ema21 and ema21 < ema50 and rsi_val < 50 and (near_ema9_short or pullback_short) and volume > vol_sma * vol_trend_mult and body_ratio > 0.3
+
+// ── Ranging Entry Conditions ──
+bb_range_pct = bb_upper - bb_lower > 0 ? (close - bb_lower) / (bb_upper - bb_lower) : 0.5
+
+range_long = is_ranging and not htf_bearish and rsi_val < rsi_oversold and bb_range_pct < bb_touch_pct and volume > vol_sma * vol_range_mult
+
+range_short = is_ranging and not htf_bullish and rsi_val > rsi_overbought and bb_range_pct > (1 - bb_touch_pct) and volume > vol_sma * vol_range_mult
+
+// ── Combined Signals ──
+long_signal  = (trend_long or range_long) and show_signals
+short_signal = (trend_short or range_short) and show_signals
+
+// ── TP/SL Calculations ──
+sl_mult = is_trending ? sl_trend_mult : sl_range_mult
+long_sl  = close - atr_val * sl_mult
+long_tp1 = close + atr_val * tp1_atr_mult
+long_tp2 = close + atr_val * tp2_atr_mult
+short_sl  = close + atr_val * sl_mult
+short_tp1 = close - atr_val * tp1_atr_mult
+short_tp2 = close - atr_val * tp2_atr_mult
+
+// ── Plot Signals ──
+plotshape(long_signal,  "Long",  shape.triangleup,   location.belowbar, color.new(#00ff88, 0), size=size.small)
+plotshape(short_signal, "Short", shape.triangledown, location.abovebar, color.new(#ff4466, 0), size=size.small)
+
+// ── TP/SL Lines ──
+if long_signal and show_tp_sl
+    label.new(bar_index, long_tp1, "TP1", color=color.new(#00ff00, 70), textcolor=color.white, size=size.tiny, style=label.style_label_down)
+    label.new(bar_index, long_sl, "SL", color=color.new(#ff0000, 70), textcolor=color.white, size=size.tiny, style=label.style_label_up)
+    line.new(bar_index, long_tp1, bar_index + 5, long_tp1, color=color.new(#00ff00, 50), style=line.style_dashed)
+    line.new(bar_index, long_sl, bar_index + 5, long_sl, color=color.new(#ff0000, 50), style=line.style_dashed)
+
+if short_signal and show_tp_sl
+    label.new(bar_index, short_tp1, "TP1", color=color.new(#00ff00, 70), textcolor=color.white, size=size.tiny, style=label.style_label_up)
+    label.new(bar_index, short_sl, "SL", color=color.new(#ff0000, 70), textcolor=color.white, size=size.tiny, style=label.style_label_down)
+    line.new(bar_index, short_tp1, bar_index + 5, short_tp1, color=color.new(#00ff00, 50), style=line.style_dashed)
+    line.new(bar_index, short_sl, bar_index + 5, short_sl, color=color.new(#ff0000, 50), style=line.style_dashed)
+
+// ── Regime Background ──
+bg_color = show_regime ? (is_trending ? color.new(#2196f3, 95) : color.new(#ff9800, 95)) : na
+bgcolor(bg_color, title="Regime")
+
+// ── HTF Bias Bar ──
+htf_color = htf_bullish ? color.new(#00ff88, 80) : htf_bearish ? color.new(#ff4466, 80) : na
+bgcolor(htf_color, title="HTF Bias")
+
+// ── Info Table ──
+var table info = table.new(position.top_right, 2, 6, bgcolor=color.new(#1a1a2e, 20), border_width=1)
+
+if barstate.islast
+    regime_text = is_trending ? "TRENDING" : "RANGING"
+    bias_text = htf_bullish ? "BULLISH" : htf_bearish ? "BEARISH" : "NEUTRAL"
+
+    table.cell(info, 0, 0, "Regime", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 0, regime_text, text_color=is_trending ? #2196f3 : #ff9800, text_size=size.small)
+    table.cell(info, 0, 1, "HTF Bias", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 1, bias_text, text_color=htf_bullish ? #00ff88 : htf_bearish ? #ff4466 : color.gray, text_size=size.small)
+    table.cell(info, 0, 2, "ADX", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 2, str.tostring(adx_val, "#.0"), text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 3, "RSI", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 3, str.tostring(rsi_val, "#.0"), text_color=rsi_val > 60 ? #ff4466 : rsi_val < 40 ? #00ff88 : color.white, text_size=size.small)
+    table.cell(info, 0, 4, "ATR", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 4, str.tostring(atr_val, "#.1"), text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 5, "Vol/SMA", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 5, str.tostring(volume / vol_sma, "#.2") + "x", text_color=volume > vol_sma ? #00ff88 : #ff4466, text_size=size.small)
+
+// ── Alerts ──
+alertcondition(long_signal,  "FUTU Long Signal",  "FUTU: LONG entry signal")
+alertcondition(short_signal, "FUTU Short Signal", "FUTU: SHORT entry signal")
