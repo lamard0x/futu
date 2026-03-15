@@ -240,17 +240,17 @@ class Exchange:
                 return
             close_side = "sell" if position["side"] == "long" else "buy"
 
-            # Place new SL
+            # Place new SL as market stop
             if sl_price is not None:
                 await self.rate_limiter.acquire("create_order")
-                params = {"reduceOnly": True}
+                params = {"reduceOnly": True, "triggerPrice": sl_price}
                 if self.exchange_name == "okx":
                     params["tdMode"] = self.config.margin_mode
                 await self.exchange.create_order(
-                    symbol=self.config.symbol, type="stop",
+                    symbol=self.config.symbol, type="market",
                     side=close_side, amount=position["size"],
-                    price=None,
-                    params={**params, "stopPrice": sl_price, "triggerPrice": sl_price},
+                    price=sl_price,
+                    params=params,
                 )
             logger.info("Trailing SL updated: %.2f", sl_price or 0)
         except Exception as e:
