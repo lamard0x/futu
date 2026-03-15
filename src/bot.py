@@ -120,8 +120,16 @@ class FutuBot:
             logger.warning("Position sync error: %s", e)
 
     async def _sync_balance(self):
-        """Balance fixed at config value ($300) — demo account inflated, don't sync."""
-        logger.info("Balance: $%.2f (fixed)", self.config.risk.account_balance)
+        """Sync real balance for display, but position sizing uses fixed $300."""
+        try:
+            balance = await self.exchange.exchange.fetch_balance()
+            usdt = balance.get("USDT", {})
+            total = float(usdt.get("total") or 0)
+            if total > 0:
+                logger.info("Exchange balance: $%.2f | Trading with: $%.2f",
+                            total, self.config.risk.account_balance)
+        except Exception as e:
+            logger.warning("Balance sync error: %s", e)
 
     async def _refresh_symbols(self):
         self.symbols = await self.exchange.get_top_volume_symbols(
