@@ -294,10 +294,13 @@ class Exchange:
                 if items:
                     return float(items[0].get("closedPnl", 0))
             else:
-                trades = await self.exchange.fetch_my_trades(sym, limit=5)
-                if trades:
-                    pnl = sum(float(t.get("info", {}).get("pnl", 0)) for t in trades)
-                    return pnl
+                # OKX: fetch recent trades, find the closing trade with PnL
+                trades = await self.exchange.fetch_my_trades(sym, limit=10)
+                for t in reversed(trades):
+                    pnl = float(t.get("info", {}).get("pnl") or 0)
+                    if pnl != 0:
+                        logger.info("Closed PnL for %s: $%.4f", sym.split("/")[0], pnl)
+                        return pnl
         except Exception as e:
             logger.warning("Get closed PnL error: %s", e)
         return 0.0
