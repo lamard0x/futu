@@ -100,12 +100,17 @@ class CommandListener:
         self.running = False
 
     async def _poll_loop(self):
+        logger.info("Poll loop task started")
         while self.running:
             try:
                 await self._poll()
+            except asyncio.CancelledError:
+                logger.info("Poll loop cancelled")
+                return
             except Exception as e:
                 logger.warning("Telegram poll error: %s", e)
             await asyncio.sleep(2)
+        logger.info("Poll loop ended (running=False)")
 
     async def _poll(self):
         if not BOT_TOKEN:
@@ -134,6 +139,7 @@ class CommandListener:
                 parts = text.split()
                 cmd = parts[0].replace("/", "").replace("@", " ").split()[0]
                 args = parts[1:] if len(parts) > 1 else []
+                logger.info("Command received: /%s", cmd)
                 await self._handle_command(cmd, args)
 
     async def _handle_command(self, cmd: str, args: list[str] = None):

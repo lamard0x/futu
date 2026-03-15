@@ -131,15 +131,15 @@ class Exchange:
         await self.rate_limiter.acquire("fetch_positions")
         positions = await retry_api_call(self.exchange.fetch_positions, [self.config.symbol])
         for pos in positions:
-            size = float(pos.get("contracts", 0))
+            size = float(pos.get("contracts") or 0)
             if size > 0:
                 return {
                     "side": pos["side"],
                     "size": size,
-                    "entry_price": float(pos.get("entryPrice", 0)),
-                    "unrealized_pnl": float(pos.get("unrealizedPnl", 0)),
-                    "notional": float(pos.get("notional", 0)),
-                    "liquidation_price": float(pos.get("liquidationPrice", 0)),
+                    "entry_price": float(pos.get("entryPrice") or 0),
+                    "unrealized_pnl": float(pos.get("unrealizedPnl") or 0),
+                    "notional": float(pos.get("notional") or 0),
+                    "liquidation_price": float(pos.get("liquidationPrice") or 0),
                 }
         return None
 
