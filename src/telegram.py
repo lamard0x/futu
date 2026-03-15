@@ -332,7 +332,7 @@ async def notify_signal(symbol: str, side: str, entry: float, sl: float,
         f"📍 Entry: <code>{entry:.2f}</code>\n"
         f"🎯 TP: <code>{tp:.2f}</code>\n"
         f"🛡 SL: <code>{sl:.2f}</code>\n"
-        f"📦 Size: <code>{amount:.6f}</code>\n"
+        f"📦 Size: <code>${amount * entry:.0f}</code>\n"
         f"⚖️ R:R = <code>{rr:.2f}</code>"
     )
     if chart_bytes:
