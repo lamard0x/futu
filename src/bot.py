@@ -111,8 +111,22 @@ class FutuBot:
                 logger.info("Synced %d open positions from exchange", synced)
             else:
                 logger.info("No open positions on exchange")
+            # Sync balance from exchange
+            await self._sync_balance()
         except Exception as e:
             logger.warning("Position sync error: %s", e)
+
+    async def _sync_balance(self):
+        try:
+            balance = await self.exchange.exchange.fetch_balance()
+            usdt = balance.get("USDT", {})
+            total = float(usdt.get("total") or 0)
+            if total > 0:
+                self.config.risk.account_balance = total
+                self.risk.config.account_balance = total
+                logger.info("Balance synced: $%.2f", total)
+        except Exception as e:
+            logger.warning("Balance sync error: %s", e)
 
     async def _refresh_symbols(self):
         self.symbols = await self.exchange.get_top_volume_symbols(
@@ -447,6 +461,7 @@ class FutuBot:
                 else:
                     state.has_position = False
                 self.risk.on_trade_closed(real_pnl)
+                await self._sync_balance()
                 logger.info("%s %s closed (TP/SL hit) PnL: $%.2f",
                             symbol.split("/")[0], regime, real_pnl)
                 await telegram.notify_close(
@@ -474,6 +489,7 @@ class FutuBot:
                 else:
                     state.has_position = False
                 self.risk.on_trade_closed(pnl)
+                await self._sync_balance()
                 if pnl < 0:
                     state.cooldown = self.config.risk.cooldown_candles
                 await telegram.notify_close(
