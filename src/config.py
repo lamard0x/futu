@@ -39,8 +39,8 @@ class IndicatorConfig:
 @dataclass
 class StrategyConfig:
     # Regime detection
-    adx_trending: float = 25.0
-    adx_ranging: float = 25.0
+    adx_trending: float = 35.0
+    adx_ranging: float = 35.0
 
     # Trending mode entry (now filtered by H4 bias)
     rsi_trend_bull: float = 50.0
@@ -106,7 +106,7 @@ class WebhookConfig:
 class TrendingConfig:
     """Breakout trending on 1H — separate from ranging."""
     enabled: bool = True
-    adx_min: float = 25.0
+    adx_min: float = 35.0
     vol_mult: float = 1.5
     lookback: int = 20
     body_pct: float = 0.5
