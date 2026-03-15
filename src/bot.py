@@ -77,12 +77,15 @@ class FutuBot:
         await self.webhook.start()
         self.running = True
 
+        logger.info("Entering main loop...")
         try:
             await self._run_loop()
         except KeyboardInterrupt:
             logger.info("Shutting down...")
         except Exception as e:
             logger.error("Fatal error: %s", e, exc_info=True)
+            import traceback
+            traceback.print_exc()
             await telegram.notify_error(str(e))
         finally:
             await self.cmd_listener.stop()
@@ -144,12 +147,14 @@ class FutuBot:
         logger.info("Active symbols: %s", [s.split("/")[0] for s in self.symbols])
 
     async def _run_loop(self):
+        logger.info("Main loop started")
         while True:
             if self.running:
                 try:
                     await self._tick()
                 except Exception as e:
                     logger.error("Tick error: %s", e, exc_info=True)
+            logger.info("Sleeping 60s until next tick...")
             await asyncio.sleep(60)
 
     async def _tick(self):
@@ -263,20 +268,29 @@ class FutuBot:
                 break
 
             try:
-                signal = await self._scan_symbol(sym, state.bias)
+                signal = await asyncio.wait_for(
+                    self._scan_symbol(sym, state.bias), timeout=30,
+                )
                 if signal and signal.type != SignalType.NONE:
                     signals_found += 1
                     await self._execute_signal(signal, sym)
                     open_positions += 1
+            except asyncio.TimeoutError:
+                logger.warning("Scan timeout %s", sym.split("/")[0])
             except Exception as e:
                 logger.warning("Scan error %s: %s", sym, e)
 
             await asyncio.sleep(0.2)
 
-        await telegram.notify_heartbeat(
-            len(self.symbols), signals_found,
-            open_positions, self.config.risk.account_balance,
-        )
+        try:
+            await asyncio.wait_for(
+                telegram.notify_heartbeat(
+                    len(self.symbols), signals_found,
+                    open_positions, self.config.risk.account_balance,
+                ), timeout=15,
+            )
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.warning("Heartbeat notify failed: %s", e)
 
     async def _scan_trending_symbols(self):
         """Scan trending symbols for breakout signals on 1H. Independent from ranging."""
