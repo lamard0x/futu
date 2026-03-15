@@ -67,6 +67,7 @@ class FutuBot:
 
         await self.exchange.connect()
         await self._refresh_symbols()
+        await self._sync_open_positions()
         await telegram.notify_startup(self.symbols, self.config.risk.account_balance)
         self.cmd_listener = CommandListener(self)
         await self.cmd_listener.start()
@@ -88,6 +89,30 @@ class FutuBot:
             await self.funding.stop()
             await self.webhook.stop()
             await self.exchange.disconnect()
+
+    async def _sync_open_positions(self):
+        """Sync open positions from exchange on startup — prevents orphaned trades."""
+        try:
+            positions = await self.exchange.exchange.fetch_positions()
+            synced = 0
+            for p in positions:
+                size = float(p.get("contracts", 0))
+                if size <= 0:
+                    continue
+                sym = p["symbol"]
+                if sym not in self.states:
+                    self.states[sym] = SymbolState(symbol=sym)
+                self.states[sym].has_position = True
+                synced += 1
+                logger.info("Synced position: %s %s %.4f @ %.2f",
+                            sym.split("/")[0], p.get("side", "?"),
+                            size, float(p.get("entryPrice") or 0))
+            if synced:
+                logger.info("Synced %d open positions from exchange", synced)
+            else:
+                logger.info("No open positions on exchange")
+        except Exception as e:
+            logger.warning("Position sync error: %s", e)
 
     async def _refresh_symbols(self):
         self.symbols = await self.exchange.get_top_volume_symbols(
@@ -146,10 +171,14 @@ class FutuBot:
         if self._should_main_scan(now):
             await self._scan_all_symbols()
             self.last_main_scan = now
+            logger.info("Ranging scan complete, next in %s", self.config.timeframe.main_tf)
 
         # Trending scan every 1 hour (1H TF)
         if self.config.trending.enabled and self._should_trending_scan(now):
-            await self._scan_trending_symbols()
+            try:
+                await self._scan_trending_symbols()
+            except Exception as e:
+                logger.error("Trending scan error: %s", e, exc_info=True)
             self.last_trending_scan = now
 
     def _should_refresh_symbols(self, now: datetime) -> bool:
