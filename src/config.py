@@ -79,8 +79,8 @@ class RiskConfig:
     risk_per_trade_scalp: float = 0.01
     max_daily_loss_pct: float = 0.06
     max_positions: int = 999  # unlimited, 1 per symbol per regime
-    max_symbols: int = 10
-    cooldown_candles: int = 2
+    max_symbols: int = 20
+    cooldown_candles: int = 0
     min_rr_trending: float = 1.3
     min_rr_ranging: float = 1.2
 
