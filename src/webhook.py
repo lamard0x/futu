@@ -5,6 +5,7 @@ from aiohttp import web
 
 from src.config import Config
 from src.strategy import Signal, SignalType, SignalSource, Regime
+from src.dashboard import Dashboard
 
 logger = logging.getLogger("futu.webhook")
 
@@ -18,27 +19,25 @@ class WebhookServer:
         self._rate_limits: dict[str, list[float]] = defaultdict(list)
 
     async def start(self):
-        if not self.config.webhook.enabled:
-            logger.info("Webhook server disabled")
-            return
-
         app = web.Application()
         app.router.add_get("/health", self._handle_health)
-        app.router.add_post("/webhook", self._handle_webhook)
+
+        # Dashboard always enabled
+        dashboard = Dashboard(self.bot)
+        dashboard.setup(app)
+
+        if self.config.webhook.enabled:
+            app.router.add_post("/webhook", self._handle_webhook)
 
         self.runner = web.AppRunner(app)
         await self.runner.setup()
-        self.site = web.TCPSite(
-            self.runner,
-            self.config.webhook.host,
-            self.config.webhook.port,
-        )
-        await self.site.start()
-        logger.info(
-            "Webhook server on %s:%d",
-            self.config.webhook.host,
-            self.config.webhook.port,
-        )
+        port = self.config.webhook.port or 8888
+        try:
+            self.site = web.TCPSite(self.runner, "localhost", port)
+            await self.site.start()
+            logger.info("Dashboard on http://localhost:%d", port)
+        except Exception as e:
+            logger.error("Dashboard start failed: %s", e)
 
     async def stop(self):
         if self.runner:
