@@ -240,12 +240,13 @@ class Exchange:
                 return
             close_side = "sell" if position["side"] == "long" else "buy"
 
-            # Place new SL as market stop
+            # Place new SL as conditional stop
             if sl_price is not None:
                 await self.rate_limiter.acquire("create_order")
-                params = {"reduceOnly": True, "triggerPrice": sl_price}
+                params = {"triggerPrice": str(sl_price)}
                 if self.exchange_name == "okx":
                     params["tdMode"] = self.config.margin_mode
+                    params["ordType"] = "conditional"
                 await self.exchange.create_order(
                     symbol=self.config.symbol, type="market",
                     side=close_side, amount=position["size"],
