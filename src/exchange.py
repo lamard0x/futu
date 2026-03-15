@@ -286,7 +286,8 @@ class Exchange:
                 # OKX: fetch recent trades, find the closing trade with PnL
                 trades = await self.exchange.fetch_my_trades(sym, limit=10)
                 for t in reversed(trades):
-                    pnl = float(t.get("info", {}).get("pnl") or 0)
+                    info = t.get("info", {})
+                    pnl = float(info.get("fillPnl") or info.get("pnl") or 0)
                     if pnl != 0:
                         logger.info("Closed PnL for %s: $%.4f", sym.split("/")[0], pnl)
                         return pnl
