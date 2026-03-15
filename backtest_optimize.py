@@ -34,61 +34,62 @@ SYMBOLS = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT",
 
 # ═══ Parameter Sets to Test ═══
 PARAM_SETS = {
-    "CURRENT": {
-        "rsi_oversold": 40, "rsi_overbought": 60,
-        "bb_touch_pct": 0.5, "volume_range_mult": 0.8,
-        "volume_trend_mult": 1.2, "rsi_trend_bull": 50,
-        "trending_neutral_bias": False,  # custom: allow neutral bias for trending
-        "add_5m_scan": False,
-    },
-    "A_RSI_WIDER": {
-        "rsi_oversold": 45, "rsi_overbought": 55,
-        "bb_touch_pct": 0.5, "volume_range_mult": 0.8,
-        "volume_trend_mult": 1.2, "rsi_trend_bull": 50,
-        "trending_neutral_bias": False,
-        "add_5m_scan": False,
-    },
-    "B_BB_WIDER": {
-        "rsi_oversold": 42, "rsi_overbought": 58,
-        "bb_touch_pct": 1.0, "volume_range_mult": 0.8,
-        "volume_trend_mult": 1.2, "rsi_trend_bull": 50,
-        "trending_neutral_bias": False,
-        "add_5m_scan": False,
-    },
-    "C_VOL_LOWER": {
+    # ═══ Baseline: ranging only ═══
+    "RANGE_ONLY": {
         "rsi_oversold": 42, "rsi_overbought": 58,
         "bb_touch_pct": 0.8, "volume_range_mult": 0.6,
-        "volume_trend_mult": 1.0, "rsi_trend_bull": 50,
-        "trending_neutral_bias": False,
-        "add_5m_scan": False,
+        "max_ranging_pos": 3, "max_trending_pos": 0,
     },
-    "D_TREND_NEUTRAL": {
-        "rsi_oversold": 40, "rsi_overbought": 60,
-        "bb_touch_pct": 0.5, "volume_range_mult": 0.8,
-        "volume_trend_mult": 1.0, "rsi_trend_bull": 45,
-        "trending_neutral_bias": True,  # allow trending on neutral HTF
-        "add_5m_scan": False,
-    },
-    "E_COMBO_MILD": {
+    # ═══ Parallel: ranging (3) + breakout trending (2) ═══
+    # Trending params: t_adx_min, t_vol_mult, t_lookback, t_body_pct, t_sl_atr, t_min_rr
+    "BRK_STRICT": {
         "rsi_oversold": 42, "rsi_overbought": 58,
-        "bb_touch_pct": 0.8, "volume_range_mult": 0.7,
-        "volume_trend_mult": 1.0, "rsi_trend_bull": 45,
-        "trending_neutral_bias": True,
-        "add_5m_scan": False,
+        "bb_touch_pct": 0.8, "volume_range_mult": 0.6,
+        "max_ranging_pos": 3, "max_trending_pos": 2,
+        "t_adx_min": 28, "t_vol_mult": 2.0, "t_lookback": 20,
+        "t_body_pct": 0.6, "t_sl_atr": 2.0, "t_min_rr": 1.5,
     },
-    "F_COMBO_AGG": {
-        "rsi_oversold": 45, "rsi_overbought": 55,
-        "bb_touch_pct": 1.2, "volume_range_mult": 0.6,
-        "volume_trend_mult": 0.9, "rsi_trend_bull": 45,
-        "trending_neutral_bias": True,
-        "add_5m_scan": False,
-    },
-    "G_5M_SCAN": {
+    "BRK_MEDIUM": {
         "rsi_oversold": 42, "rsi_overbought": 58,
-        "bb_touch_pct": 0.8, "volume_range_mult": 0.7,
-        "volume_trend_mult": 1.0, "rsi_trend_bull": 45,
-        "trending_neutral_bias": True,
-        "add_5m_scan": True,
+        "bb_touch_pct": 0.8, "volume_range_mult": 0.6,
+        "max_ranging_pos": 3, "max_trending_pos": 2,
+        "t_adx_min": 25, "t_vol_mult": 1.5, "t_lookback": 20,
+        "t_body_pct": 0.5, "t_sl_atr": 2.0, "t_min_rr": 1.5,
+    },
+    "BRK_LOOSE": {
+        "rsi_oversold": 42, "rsi_overbought": 58,
+        "bb_touch_pct": 0.8, "volume_range_mult": 0.6,
+        "max_ranging_pos": 3, "max_trending_pos": 2,
+        "t_adx_min": 22, "t_vol_mult": 1.3, "t_lookback": 15,
+        "t_body_pct": 0.4, "t_sl_atr": 2.0, "t_min_rr": 1.3,
+    },
+    "BRK_WIDESLR": {
+        "rsi_oversold": 42, "rsi_overbought": 58,
+        "bb_touch_pct": 0.8, "volume_range_mult": 0.6,
+        "max_ranging_pos": 3, "max_trending_pos": 2,
+        "t_adx_min": 25, "t_vol_mult": 1.5, "t_lookback": 20,
+        "t_body_pct": 0.5, "t_sl_atr": 2.5, "t_min_rr": 1.5,
+    },
+    "BRK_SHORT_LB": {
+        "rsi_oversold": 42, "rsi_overbought": 58,
+        "bb_touch_pct": 0.8, "volume_range_mult": 0.6,
+        "max_ranging_pos": 3, "max_trending_pos": 2,
+        "t_adx_min": 25, "t_vol_mult": 1.5, "t_lookback": 10,
+        "t_body_pct": 0.5, "t_sl_atr": 2.0, "t_min_rr": 1.5,
+    },
+    "BRK_3SLOTS": {
+        "rsi_oversold": 42, "rsi_overbought": 58,
+        "bb_touch_pct": 0.8, "volume_range_mult": 0.6,
+        "max_ranging_pos": 3, "max_trending_pos": 3,
+        "t_adx_min": 25, "t_vol_mult": 1.5, "t_lookback": 20,
+        "t_body_pct": 0.5, "t_sl_atr": 2.0, "t_min_rr": 1.5,
+    },
+    "BRK_HIGHVOL": {
+        "rsi_oversold": 42, "rsi_overbought": 58,
+        "bb_touch_pct": 0.8, "volume_range_mult": 0.6,
+        "max_ranging_pos": 3, "max_trending_pos": 2,
+        "t_adx_min": 25, "t_vol_mult": 2.0, "t_lookback": 20,
+        "t_body_pct": 0.5, "t_sl_atr": 2.0, "t_min_rr": 1.5,
     },
 }
 
@@ -139,12 +140,10 @@ def calc_size(balance, entry, sl, leverage, max_pos):
     return pv / entry, pv
 
 
-def scan_bar(row, prev, bias, p, ind_cfg):
+def scan_ranging(row, bias, p, ind_cfg):
+    """Mean-reversion: buy BB lower, sell BB upper."""
     close = row["close"]
-    high = row["high"]
-    low = row["low"]
     rsi = row.get("rsi") or 0
-    prev_rsi = prev.get("rsi") or 0
     adx = row.get("adx") or 0
     atr = row.get("atr") or 0
     vol = row.get("volume") or 0
@@ -152,16 +151,12 @@ def scan_bar(row, prev, bias, p, ind_cfg):
     bbu = row.get("bb_upper") or 0
     bbl = row.get("bb_lower") or 0
     bbm = row.get("bb_mid") or 0
-    vwap = row.get("vwap") or 0
-    ema21 = row.get(f"ema_{ind_cfg.ema_mid}") or 0
 
-    if atr <= 0:
+    if atr <= 0 or adx >= 25:
         return None
 
-    trending = adx >= 25
-
     # RANGING LONG
-    if not trending and bias != "bearish":
+    if bias != "bearish":
         if (bbl > 0 and close <= bbl * (1 + p["bb_touch_pct"] / 100)
                 and rsi < p["rsi_oversold"]
                 and vsma > 0 and vol > vsma * p["volume_range_mult"]):
@@ -173,7 +168,7 @@ def scan_bar(row, prev, bias, p, ind_cfg):
                 return {"side": "long", "regime": "ranging", "entry": close, "sl": sl, "tp": tp}
 
     # RANGING SHORT
-    if not trending and bias != "bullish":
+    if bias != "bullish":
         if (bbu > 0 and close >= bbu * (1 - p["bb_touch_pct"] / 100)
                 and rsi > p["rsi_overbought"]
                 and vsma > 0 and vol > vsma * p["volume_range_mult"]):
@@ -184,51 +179,111 @@ def scan_bar(row, prev, bias, p, ind_cfg):
             if risk > 0 and reward / risk >= 1.2:
                 return {"side": "short", "regime": "ranging", "entry": close, "sl": sl, "tp": tp}
 
-    # TRENDING LONG
-    bias_ok = bias == "bullish" or (p["trending_neutral_bias"] and bias == "neutral")
-    if trending and bias_ok:
-        pullback = (low <= ema21 * 1.005) or (vwap > 0 and low <= vwap * 1.005)
-        if (vwap > 0 and close > vwap
-                and rsi > p["rsi_trend_bull"] and rsi > prev_rsi
-                and vsma > 0 and vol > vsma * p["volume_trend_mult"]
-                and pullback):
-            sl = close - 1.5 * atr
-            tp = close + 2.5 * atr
-            risk = abs(close - sl)
-            reward = abs(tp - close)
-            if risk > 0 and reward / risk >= 1.3:
-                return {"side": "long", "regime": "trending", "entry": close, "sl": sl, "tp": tp}
+    return None
 
-    # TRENDING SHORT
-    bias_ok_s = bias == "bearish" or (p["trending_neutral_bias"] and bias == "neutral")
-    if trending and bias_ok_s:
-        pullback = (high >= ema21 * 0.995) or (vwap > 0 and high >= vwap * 0.995)
-        if (vwap > 0 and close < vwap
-                and rsi < (100 - p["rsi_trend_bull"]) and rsi < prev_rsi
-                and vsma > 0 and vol > vsma * p["volume_trend_mult"]
-                and pullback):
-            sl = close + 1.5 * atr
-            tp = close - 2.5 * atr
-            risk = abs(close - sl)
-            reward = abs(tp - close)
-            if risk > 0 and reward / risk >= 1.3:
-                return {"side": "short", "regime": "trending", "entry": close, "sl": sl, "tp": tp}
+
+def scan_trending(row, prev, df_slice, bias, tp, ind_cfg):
+    """Breakout + momentum: ride the wave with trailing stop, no fixed TP.
+
+    Trending logic:
+    - Breakout: close breaks above/below recent N-bar high/low
+    - Momentum: strong body candle + volume surge + DI alignment
+    - ADX confirms trend strength
+    - Trailing SL only (chandelier), NO fixed TP — let winners run
+    """
+    close = row["close"]
+    high = row["high"]
+    low = row["low"]
+    opn = row["open"]
+    rsi = row.get("rsi") or 0
+    adx = row.get("adx") or 0
+    atr = row.get("atr") or 0
+    vol = row.get("volume") or 0
+    vsma = row.get("volume_sma") or 0
+    plus_di = row.get("plus_di") or 0
+    minus_di = row.get("minus_di") or 0
+    ema_f = row.get(f"ema_{ind_cfg.ema_fast}") or 0
+    ema_m = row.get(f"ema_{ind_cfg.ema_mid}") or 0
+    ema_s = row.get(f"ema_{ind_cfg.ema_slow}") or 0
+
+    if atr <= 0:
+        return None
+
+    adx_min = tp.get("t_adx_min", 25)
+    vol_mult = tp.get("t_vol_mult", 1.5)
+    lookback = tp.get("t_lookback", 20)
+    body_pct = tp.get("t_body_pct", 0.5)
+    sl_atr = tp.get("t_sl_atr", 2.0)
+    min_rr = tp.get("t_min_rr", 1.5)
+
+    if adx < adx_min:
+        return None
+    if vsma <= 0 or vol < vsma * vol_mult:
+        return None
+
+    # Body strength: candle body > X% of total range
+    candle_range = high - low
+    if candle_range <= 0:
+        return None
+    body = abs(close - opn)
+    if body / candle_range < body_pct:
+        return None
+
+    # Recent high/low for breakout detection
+    if len(df_slice) < lookback:
+        return None
+    recent = df_slice.iloc[-lookback:]
+    recent_high = recent["high"].max()
+    recent_low = recent["low"].min()
+
+    # ═══ TRENDING LONG ═══
+    if (plus_di > minus_di
+            and close > recent_high  # breakout above recent high
+            and close > opn  # bullish candle
+            and ema_f > ema_m  # short-term momentum
+            and rsi > 50 and rsi < 80  # momentum but not overbought
+            and (bias == "bullish" or bias == "neutral")):
+        sl = close - sl_atr * atr
+        tp_price = close + sl_atr * min_rr * atr  # used for R:R check only
+        return {"side": "long", "regime": "trending", "entry": close,
+                "sl": sl, "tp": tp_price}
+
+    # ═══ TRENDING SHORT ═══
+    if (minus_di > plus_di
+            and close < recent_low  # breakout below recent low
+            and close < opn  # bearish candle
+            and ema_f < ema_m  # short-term momentum
+            and rsi < 50 and rsi > 20  # momentum but not oversold
+            and (bias == "bearish" or bias == "neutral")):
+        sl = close + sl_atr * atr
+        tp_price = close - sl_atr * min_rr * atr
+        return {"side": "short", "regime": "trending", "entry": close,
+                "sl": sl, "tp": tp_price}
 
     return None
 
 
 def check_exit(t, row, candles, is_ranging):
     h, l = row["high"], row["low"]
+    # SL always checked
     if t.side == "long" and l <= t.sl_price:
         return t.sl_price, "SL"
     if t.side == "short" and h >= t.sl_price:
         return t.sl_price, "SL"
-    if t.side == "long" and h >= t.tp_price:
-        return t.tp_price, "TP"
-    if t.side == "short" and l <= t.tp_price:
-        return t.tp_price, "TP"
-    if is_ranging and candles >= 15:
-        return row["close"], "TIME"
+
+    if is_ranging:
+        # Ranging: fixed TP + time exit
+        if t.side == "long" and h >= t.tp_price:
+            return t.tp_price, "TP"
+        if t.side == "short" and l <= t.tp_price:
+            return t.tp_price, "TP"
+        if candles >= 15:
+            return row["close"], "TIME"
+    else:
+        # Trending: NO fixed TP — rely on trailing SL (chandelier)
+        # Only have a max hold time to prevent stuck positions
+        if candles >= 60:  # 60 bars = 15h on 15m
+            return row["close"], "TIME"
     return None
 
 
@@ -269,10 +324,13 @@ def to_df(ohlcv):
 
 
 def run_sim(params, data_cache, backtest_start):
-    """Run simulation with given params on cached data."""
+    """Run simulation with given params on cached data.
+    Parallel mode: ranging and trending have SEPARATE position pools.
+    """
     balance = BALANCE_START
     trades = []
-    open_trades = []
+    open_ranging = []   # separate pool
+    open_trending = []  # separate pool
     daily_loss = 0.0
     daily_date = ""
     cooldown = 0
@@ -280,6 +338,9 @@ def run_sim(params, data_cache, backtest_start):
     losses = 0
     peak = BALANCE_START
     max_dd = 0.0
+
+    max_ranging = params.get("max_ranging_pos", 3)
+    max_trending = params.get("max_trending_pos", 2)
 
     timeframes_to_scan = ["15m"]
     if params.get("add_5m_scan"):
@@ -307,9 +368,10 @@ def run_sim(params, data_cache, backtest_start):
                     daily_loss = 0.0
                     daily_date = day_str
 
-                # Check exits
+                # Check exits for BOTH pools
+                all_open = open_ranging + open_trending
                 closed = []
-                for t in open_trades:
+                for t in all_open:
                     if t.symbol != symbol or t.tf != tf:
                         continue
                     t.candles_held += 1
@@ -342,17 +404,16 @@ def run_sim(params, data_cache, backtest_start):
                             max_dd = dd
 
                 for t in closed:
-                    open_trades.remove(t)
+                    if t in open_ranging:
+                        open_ranging.remove(t)
+                    elif t in open_trending:
+                        open_trending.remove(t)
 
                 if cooldown > 0:
                     cooldown -= 1
                     continue
 
                 if daily_loss >= balance * 0.06:
-                    continue
-                if len(open_trades) >= 3:
-                    continue
-                if any(t.symbol == symbol and t.tf == tf for t in open_trades):
                     continue
 
                 bias = "neutral"
@@ -361,18 +422,32 @@ def run_sim(params, data_cache, backtest_start):
                         bias = htf_biases[ht]
                         break
 
-                sig = scan_bar(row, prev, bias, params, IND_CFG)
-                if not sig:
-                    continue
+                # ═══ RANGING: independent scan ═══
+                if (max_ranging > 0
+                        and len(open_ranging) < max_ranging
+                        and not any(t.symbol == symbol and t.tf == tf for t in open_ranging)):
+                    rsig = scan_ranging(row, bias, params, IND_CFG)
+                    if rsig:
+                        amt, notional = calc_size(balance, rsig["entry"], rsig["sl"], LEVERAGE, max_ranging)
+                        if amt > 0:
+                            trade = Trade(symbol=symbol, side=rsig["side"], regime="ranging",
+                                          entry_price=rsig["entry"], sl_price=rsig["sl"], tp_price=rsig["tp"],
+                                          size=amt, notional=notional, entry_time=str(bar_time), tf=tf)
+                            open_ranging.append(trade)
 
-                amt, notional = calc_size(balance, sig["entry"], sig["sl"], LEVERAGE, 3)
-                if amt <= 0:
-                    continue
-
-                trade = Trade(symbol=symbol, side=sig["side"], regime=sig["regime"],
-                              entry_price=sig["entry"], sl_price=sig["sl"], tp_price=sig["tp"],
-                              size=amt, notional=notional, entry_time=str(bar_time), tf=tf)
-                open_trades.append(trade)
+                # ═══ TRENDING: independent scan (different logic) ═══
+                if (max_trending > 0
+                        and len(open_trending) < max_trending
+                        and not any(t.symbol == symbol and t.tf == tf for t in open_trending)):
+                    df_slice = df_ind.iloc[max(0, i - 30):i]
+                    tsig = scan_trending(row, prev, df_slice, bias, params, IND_CFG)
+                    if tsig:
+                        amt, notional = calc_size(balance, tsig["entry"], tsig["sl"], LEVERAGE, max_trending)
+                        if amt > 0:
+                            trade = Trade(symbol=symbol, side=tsig["side"], regime="trending",
+                                          entry_price=tsig["entry"], sl_price=tsig["sl"], tp_price=tsig["tp"],
+                                          size=amt, notional=notional, entry_time=str(bar_time), tf=tf)
+                            open_trending.append(trade)
 
     total = len(trades)
     if total == 0:
@@ -387,30 +462,36 @@ def run_sim(params, data_cache, backtest_start):
     pf = win_pnl / loss_pnl if loss_pnl > 0 else 999
 
     days_with_trades = len(set(t.exit_time[:10] for t in trades))
-    trending_count = sum(1 for t in trades if t.regime == "trending")
-    ranging_count = sum(1 for t in trades if t.regime == "ranging")
+    trending_trades = [t for t in trades if t.regime == "trending"]
+    ranging_trades = [t for t in trades if t.regime == "ranging"]
+    trending_wins = sum(1 for t in trending_trades if t.pnl_net >= 0)
+    ranging_wins = sum(1 for t in ranging_trades if t.pnl_net >= 0)
+    trending_pnl = sum(t.pnl_net for t in trending_trades)
+    ranging_pnl = sum(t.pnl_net for t in ranging_trades)
 
     return {
         "trades": total, "wins": wins, "losses": losses,
         "pnl": total_pnl, "wr": wr, "dd": max_dd * 100,
         "fees": total_fees, "pf": pf, "balance": balance,
-        "avg_day": total / 30, "days_active": days_with_trades,
-        "trending": trending_count, "ranging": ranging_count,
+        "avg_day": total / 90, "days_active": days_with_trades,
+        "trending": len(trending_trades), "ranging": len(ranging_trades),
+        "trending_wins": trending_wins, "ranging_wins": ranging_wins,
+        "trending_pnl": trending_pnl, "ranging_pnl": ranging_pnl,
     }
 
 
 async def main():
     log.info("=" * 70)
-    log.info("FUTU Parameter Optimizer — 30 Days")
+    log.info("FUTU Parameter Optimizer — 90 Days")
     log.info("=" * 70)
 
     ex = ccxt.okx({"options": {"defaultType": "swap"}})
     await ex.load_markets()
 
     now = datetime.now(timezone.utc)
-    since = now - timedelta(days=32)
+    since = now - timedelta(days=92)
     since_ms = int(since.timestamp() * 1000)
-    backtest_start = now - timedelta(days=30)
+    backtest_start = now - timedelta(days=90)
 
     # Fetch all data once
     data_cache = {}
@@ -444,41 +525,59 @@ async def main():
     await ex.close()
 
     # Run all parameter sets
-    log.info("\n" + "=" * 70)
-    log.info("%-18s %6s %5s %5s %8s %6s %6s %5s %5s %5s",
-             "SET", "TRADES", "W", "L", "PNL", "WR%", "DD%", "PF", "T/DAY", "TREND")
-    log.info("-" * 70)
+    log.info("\n" + "=" * 85)
+    log.info("%-16s %5s %4s %4s %8s %5s %5s %4s %5s  %-12s %-12s",
+             "SET", "TOT", "W", "L", "PNL", "WR%", "DD%", "PF", "$/DAY",
+             "RANG(w/l)", "TREND(w/l)")
+    log.info("-" * 85)
 
     results = {}
     for name, params in PARAM_SETS.items():
         r = run_sim(params, data_cache, backtest_start)
         results[name] = r
-        log.info("%-18s %6d %5d %5d %+8.1f %5.1f%% %5.1f%% %5.1f %5.1f %5d",
+        rng = r.get("ranging", 0)
+        trn = r.get("trending", 0)
+        rng_w = r.get("ranging_wins", 0)
+        trn_w = r.get("trending_wins", 0)
+        rng_l = rng - rng_w if rng >= rng_w else 0
+        trn_l = trn - trn_w if trn >= trn_w else 0
+        days = r.get("days_active", 1) or 1
+        pnl_day = r["pnl"] / 30
+        log.info("%-16s %5d %4d %4d %+8.1f %5.1f %5.1f %4.1f %+5.1f  %3d(%d/%d)    %3d(%d/%d)",
                  name, r["trades"], r.get("wins", 0), r.get("losses", 0),
-                 r["pnl"], r["wr"], r["dd"], r["pf"], r["avg_day"], r.get("trending", 0))
+                 r["pnl"], r["wr"], r["dd"], r["pf"], pnl_day,
+                 rng, rng_w, rng_l, trn, trn_w, trn_l)
 
-    # Find best
-    log.info("-" * 70)
-    best = max(results.items(), key=lambda x: x[1]["pnl"] * (x[1]["wr"] / 100))
+    # Find best by score: PnL * WR * (1 / max(DD, 1))
+    log.info("-" * 85)
+    best = max(results.items(),
+               key=lambda x: x[1]["pnl"] * (x[1]["wr"] / 100) / max(x[1]["dd"], 1))
     log.info("\nBEST: %s", best[0])
     r = best[1]
     log.info("  Trades: %d (%.1f/day) | PnL: $%+.2f | WR: %.1f%% | DD: %.1f%% | PF: %.1f",
              r["trades"], r["avg_day"], r["pnl"], r["wr"], r["dd"], r["pf"])
-    log.info("  Fees: $%.2f | Trending: %d | Ranging: %d",
-             r["fees"], r.get("trending", 0), r.get("ranging", 0))
+    log.info("  Fees: $%.2f | Ranging: %d | Trending: %d",
+             r["fees"], r.get("ranging", 0), r.get("trending", 0))
     log.info("  Final Balance: $%.2f ($%.0f start)", r["balance"], BALANCE_START)
 
-    # Print the winning params
     bp = PARAM_SETS[best[0]]
-    log.info("\n  RECOMMENDED PARAMS:")
-    log.info("    rsi_oversold:      %.0f", bp["rsi_oversold"])
-    log.info("    rsi_overbought:    %.0f", bp["rsi_overbought"])
-    log.info("    bb_touch_pct:      %.1f", bp["bb_touch_pct"])
-    log.info("    volume_range_mult: %.1f", bp["volume_range_mult"])
-    log.info("    volume_trend_mult: %.1f", bp["volume_trend_mult"])
-    log.info("    rsi_trend_bull:    %.0f", bp["rsi_trend_bull"])
-    log.info("    trending_neutral:  %s", bp["trending_neutral_bias"])
-    log.info("    add_5m_scan:       %s", bp.get("add_5m_scan", False))
+    log.info("\n  RANGING PARAMS:")
+    for k in ["rsi_oversold", "rsi_overbought", "bb_touch_pct", "volume_range_mult",
+              "max_ranging_pos"]:
+        log.info("    %-22s %s", k + ":", bp.get(k, "-"))
+    log.info("  TRENDING PARAMS:")
+    for k in ["t_adx_min", "t_vol_mult", "t_lookback", "t_body_pct",
+              "t_sl_atr", "t_min_rr", "max_trending_pos"]:
+        log.info("    %-22s %s", k + ":", bp.get(k, "-"))
+
+    # Show trending PnL breakdown for all sets
+    log.info("\n" + "=" * 60)
+    log.info("TRENDING PnL BREAKDOWN")
+    log.info("%-16s %8s %8s %8s", "SET", "RANG PnL", "TREND PnL", "TOTAL")
+    log.info("-" * 60)
+    for name, r in results.items():
+        log.info("%-16s %+8.1f %+8.1f %+8.1f",
+                 name, r.get("ranging_pnl", 0), r.get("trending_pnl", 0), r["pnl"])
 
 
 if __name__ == "__main__":
