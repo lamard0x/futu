@@ -245,7 +245,7 @@ class FutuBot:
         return signal
 
     async def _execute_signal(self, signal: Signal, symbol: str):
-        amount = self.risk.calc_position_size(signal)
+        amount = self.risk.calc_position_size(signal, leverage=self.config.exchange.leverage)
         if amount <= 0:
             logger.warning("Position size too small for %s", symbol)
             return
@@ -291,7 +291,8 @@ class FutuBot:
                         regime=signal.regime.value,
                         bias=self.states.get(symbol, SymbolState(symbol=symbol)).bias.value,
                     )
-                except Exception:
+                except Exception as e:
+                    logger.warning("Chart generation failed: %s", e)
                     chart_bytes = None
                 await telegram.notify_signal(
                     symbol, side, signal.entry_price, signal.sl_price,

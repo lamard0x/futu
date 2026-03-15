@@ -44,13 +44,13 @@ class StrategyConfig:
 
     # Trending mode entry (now filtered by H4 bias)
     rsi_trend_bull: float = 50.0
-    volume_trend_mult: float = 1.2
+    volume_trend_mult: float = 1.0
 
-    # Ranging mode entry — relaxed (HTF bias does the filtering now)
-    rsi_oversold: float = 40.0
-    rsi_overbought: float = 60.0
-    bb_touch_pct: float = 0.5
-    volume_range_mult: float = 0.8
+    # Ranging mode entry — optimized via backtest (set C)
+    rsi_oversold: float = 42.0
+    rsi_overbought: float = 58.0
+    bb_touch_pct: float = 0.8
+    volume_range_mult: float = 0.6
 
     # Candle strength filter
     min_body_ratio: float = 0.3
@@ -98,7 +98,7 @@ class FundingConfig:
 class WebhookConfig:
     enabled: bool = False
     host: str = "0.0.0.0"
-    port: int = 8080
+    port: int = 8888
     secret: str = ""
 
 

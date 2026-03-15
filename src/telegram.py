@@ -27,10 +27,11 @@ COMMANDS = [
 
 async def send_message(text: str, parse_mode: str = "HTML"):
     if not BOT_TOKEN or not CHAT_ID:
+        logger.warning("Telegram not configured (token=%s, chat=%s)", bool(BOT_TOKEN), bool(CHAT_ID))
         return
     try:
         async with aiohttp.ClientSession() as session:
-            await session.post(
+            resp = await session.post(
                 f"{API_URL}/sendMessage",
                 json={
                     "chat_id": CHAT_ID,
@@ -39,6 +40,9 @@ async def send_message(text: str, parse_mode: str = "HTML"):
                 },
                 timeout=aiohttp.ClientTimeout(total=10),
             )
+            data = await resp.json()
+            if not data.get("ok"):
+                logger.warning("Telegram API error: %s", data.get("description", "unknown"))
     except Exception as e:
         logger.warning("Telegram send error: %s", e)
 
@@ -314,6 +318,7 @@ async def notify_startup(symbols: list[str], balance: float):
 async def notify_signal(symbol: str, side: str, entry: float, sl: float,
                         tp: float, amount: float, rr: float, regime: str,
                         chart_bytes: bytes | None = None):
+    logger.info("Sending trade notification: %s %s @ %.2f", symbol.split('/')[0], side, entry)
     emoji = "🟢" if side == "buy" else "🔴"
     text = (
         f"{emoji} <b>NEW TRADE</b>\n"

@@ -56,7 +56,7 @@ class RiskManager:
 
         return True, "ok"
 
-    def calc_position_size(self, signal: Signal) -> float:
+    def calc_position_size(self, signal: Signal, leverage: int = 10) -> float:
         risk_pct = (
             self.config.risk_per_trade_main
             if signal.source == SignalSource.MAIN
@@ -67,6 +67,16 @@ class RiskManager:
         if sl_distance_pct == 0:
             return 0.0
         position_value = risk_amount / sl_distance_pct
+
+        # Cap notional by available margin (balance * leverage / max_positions)
+        max_notional = (self.config.account_balance * leverage) / max(self.config.max_positions, 1)
+        if position_value > max_notional:
+            logger.info(
+                "Size capped: $%.0f -> $%.0f (margin limit)",
+                position_value, max_notional,
+            )
+            position_value = max_notional
+
         amount_in_coin = position_value / signal.entry_price
         return round(amount_in_coin, 6)
 
