@@ -115,7 +115,9 @@ class TrendingConfig:
     # Only trade top volume symbols for trending
     symbols: list = field(default_factory=lambda: [
         "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT",
-        "BNB/USDT:USDT", "XRP/USDT:USDT",
+        "BNB/USDT:USDT", "XRP/USDT:USDT", "DOGE/USDT:USDT",
+        "ADA/USDT:USDT", "AVAX/USDT:USDT", "LINK/USDT:USDT",
+        "SUI/USDT:USDT",
     ])
 
 
