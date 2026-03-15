@@ -4,7 +4,7 @@ from enum import Enum
 
 import pandas as pd
 
-from src.config import StrategyConfig, IndicatorConfig
+from src.config import StrategyConfig, IndicatorConfig, TrendingConfig
 from src.indicators import compute_all
 
 logger = logging.getLogger("futu.strategy")
@@ -147,95 +147,85 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias) ->
     )
 
 
-# ── TRENDING MODE (trend-following on 15m, WITH H4 direction) ───────
+# ── TRENDING MODE (breakout on 1H, trailing SL only) ─────────────
 
-def check_trending_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias) -> Signal | None:
-    if bias != HTFBias.BULLISH:
-        return None  # Only long when H4 is bullish
-
-    row = df.iloc[-1]
-    prev = df.iloc[-2]
-
-    ema_f = row["ema_9"]
-    ema_m = row["ema_21"]
-    close = row["close"]
-    rsi = row["rsi"]
-    volume = row["volume"]
-    vol_sma = row["volume_sma"]
-    atr = row["atr"]
-    vwap = row["vwap"]
-
-    # 15m must also be bullish
-    above_vwap = close > vwap
-    rsi_bull = rsi > 45 and rsi > prev["rsi"]
-    volume_ok = volume > vol_sma * cfg.volume_trend_mult
-
-    # Pullback to EMA21 or VWAP (buy the dip)
-    pullback = row["low"] <= ema_m * 1.005 or row["low"] <= vwap * 1.005
-
-    if not (above_vwap and rsi_bull and volume_ok and pullback):
+def scan_trending_1h(df_1h: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias) -> Signal | None:
+    """Breakout momentum on 1H: ADX rising, volume surge, DI alignment, body strength."""
+    if len(df_1h) < cfg.lookback + 5:
         return None
 
-    entry = close
-    sl = entry - cfg.main_sl_trending_atr_mult * atr
-    tp1 = entry + cfg.main_tp1_atr_mult * atr
-    tp2 = entry + cfg.main_tp2_atr_mult * atr
+    row = df_1h.iloc[-1]
+    prev = df_1h.iloc[-2]
 
-    return Signal(
-        type=SignalType.LONG,
-        source=SignalSource.MAIN,
-        regime=Regime.TRENDING,
-        entry_price=entry,
-        sl_price=sl,
-        tp1_price=tp1,
-        tp2_price=tp2,
-        atr=atr,
-        reason=f"TREND LONG | H4 bull + 15m pullback + RSI {rsi:.0f}",
-    )
-
-
-def check_trending_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias) -> Signal | None:
-    if bias != HTFBias.BEARISH:
-        return None  # Only short when H4 is bearish
-
-    row = df.iloc[-1]
-    prev = df.iloc[-2]
-
-    ema_f = row["ema_9"]
-    ema_m = row["ema_21"]
     close = row["close"]
-    rsi = row["rsi"]
-    volume = row["volume"]
-    vol_sma = row["volume_sma"]
-    atr = row["atr"]
-    vwap = row["vwap"]
+    high = row["high"]
+    low = row["low"]
+    opn = row["open"]
+    rsi = row.get("rsi") or 0
+    adx = row.get("adx") or 0
+    atr = row.get("atr") or 0
+    vol = row.get("volume") or 0
+    vsma = row.get("volume_sma") or 0
+    plus_di = row.get("plus_di") or 0
+    minus_di = row.get("minus_di") or 0
+    ema_f = row.get("ema_9") or 0
+    ema_m = row.get("ema_21") or 0
+    prev_adx = prev.get("adx") or 0
 
-    below_vwap = close < vwap
-    rsi_bear = rsi < 55 and rsi < prev["rsi"]
-    volume_ok = volume > vol_sma * cfg.volume_trend_mult
-
-    # Pullback to EMA21 or VWAP (sell the rally)
-    pullback = row["high"] >= ema_m * 0.995 or row["high"] >= vwap * 0.995
-
-    if not (below_vwap and rsi_bear and volume_ok and pullback):
+    if atr <= 0 or adx < cfg.adx_min:
+        return None
+    if vsma <= 0 or vol < vsma * cfg.vol_mult:
+        return None
+    # ADX not falling
+    if adx < prev_adx - 1:
         return None
 
-    entry = close
-    sl = entry + cfg.main_sl_trending_atr_mult * atr
-    tp1 = entry - cfg.main_tp1_atr_mult * atr
-    tp2 = entry - cfg.main_tp2_atr_mult * atr
+    # Body strength
+    candle_range = high - low
+    if candle_range <= 0:
+        return None
+    body = abs(close - opn)
+    if body / candle_range < cfg.body_pct:
+        return None
 
-    return Signal(
-        type=SignalType.SHORT,
-        source=SignalSource.MAIN,
-        regime=Regime.TRENDING,
-        entry_price=entry,
-        sl_price=sl,
-        tp1_price=tp1,
-        tp2_price=tp2,
-        atr=atr,
-        reason=f"TREND SHORT | H4 bear + 15m pullback + RSI {rsi:.0f}",
-    )
+    # Recent high/low for breakout
+    recent = df_1h.iloc[-(cfg.lookback + 1):-1]
+    recent_high = recent["high"].max()
+    recent_low = recent["low"].min()
+
+    # BREAKOUT LONG
+    if (plus_di > minus_di
+            and close > recent_high
+            and close > opn
+            and ema_f > ema_m
+            and 50 < rsi < 80
+            and bias in (HTFBias.BULLISH, HTFBias.NEUTRAL)):
+        sl = close - cfg.sl_atr * atr
+        tp = close + cfg.sl_atr * 1.5 * atr  # for R:R check only
+        return Signal(
+            type=SignalType.LONG, source=SignalSource.MAIN,
+            regime=Regime.TRENDING, entry_price=close,
+            sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
+            reason=f"BRK LONG | ADX {adx:.0f} +DI>{minus_di:.0f} vol {vol/vsma:.1f}x",
+        )
+
+    # BREAKOUT SHORT
+    if (minus_di > plus_di
+            and close < recent_low
+            and close < opn
+            and ema_f < ema_m
+            and 20 < rsi < 50
+            and bias in (HTFBias.BEARISH, HTFBias.NEUTRAL)):
+        sl = close + cfg.sl_atr * atr
+        tp = close - cfg.sl_atr * 1.5 * atr
+        return Signal(
+            type=SignalType.SHORT, source=SignalSource.MAIN,
+            regime=Regime.TRENDING, entry_price=close,
+            sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
+            reason=f"BRK SHORT | ADX {adx:.0f} -DI>{plus_di:.0f} vol {vol/vsma:.1f}x",
+        )
+
+    return None
 
 
 # ── ALERT MODE (1-min volume spike, filtered by HTF) ────────────────
@@ -291,21 +281,17 @@ def check_alert_signal(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias) -> 
 # ── MAIN SCANNERS ────────────────────────────────────────────────────
 
 def scan_main(df_15m: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias = HTFBias.NEUTRAL) -> Signal | None:
+    """Scan 15m for ranging signals only. Trending is handled separately on 1H."""
     regime = detect_regime(df_15m, cfg)
     logger.info(
         "Regime: %s | HTF: %s | ADX: %.1f",
         regime.value, bias.value, df_15m.iloc[-1].get("adx", 0),
     )
 
-    if regime == Regime.TRENDING:
-        signal = check_trending_long(df_15m, cfg, bias)
-        if signal:
-            return signal
-        signal = check_trending_short(df_15m, cfg, bias)
-        if signal:
-            return signal
+    # Only check ranging on 15m (ADX < 25)
+    if regime != Regime.RANGING:
+        return None
 
-    # Always check ranging (mean reversion is our bread & butter)
     signal = check_ranging_long(df_15m, cfg, bias)
     if signal:
         return signal

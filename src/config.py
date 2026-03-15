@@ -78,7 +78,7 @@ class RiskConfig:
     risk_per_trade_main: float = 0.02
     risk_per_trade_scalp: float = 0.01
     max_daily_loss_pct: float = 0.06
-    max_positions: int = 3
+    max_positions: int = 999  # unlimited, 1 per symbol per regime
     max_symbols: int = 10
     cooldown_candles: int = 2
     min_rr_trending: float = 1.3
@@ -103,9 +103,27 @@ class WebhookConfig:
 
 
 @dataclass
+class TrendingConfig:
+    """Breakout trending on 1H — separate from ranging."""
+    enabled: bool = True
+    adx_min: float = 25.0
+    vol_mult: float = 1.5
+    lookback: int = 20
+    body_pct: float = 0.5
+    sl_atr: float = 2.5
+    max_hold_bars: int = 48  # 48h on 1H
+    # Only trade top volume symbols for trending
+    symbols: list = field(default_factory=lambda: [
+        "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT",
+        "BNB/USDT:USDT", "XRP/USDT:USDT",
+    ])
+
+
+@dataclass
 class TimeframeConfig:
     htf: str = "4h"
     main_tf: str = "15m"
+    trending_tf: str = "1h"
     alert_tf: str = "1m"
     candle_limit: int = 200
 
@@ -116,6 +134,7 @@ class Config:
     indicators: IndicatorConfig = field(default_factory=IndicatorConfig)
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
+    trending: TrendingConfig = field(default_factory=TrendingConfig)
     timeframe: TimeframeConfig = field(default_factory=TimeframeConfig)
     funding: FundingConfig = field(default_factory=FundingConfig)
     webhook: WebhookConfig = field(default_factory=WebhookConfig)

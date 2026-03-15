@@ -8,7 +8,7 @@ from src.config import Config
 from src.exchange import Exchange
 from src.indicators import compute_all
 from src.strategy import (
-    scan_main, scan_alert, detect_htf_bias,
+    scan_main, scan_alert, scan_trending_1h, detect_htf_bias,
     Signal, SignalType, SignalSource, Regime, HTFBias,
 )
 from src.risk import RiskManager
@@ -34,8 +34,10 @@ logger = logging.getLogger("futu.bot")
 class SymbolState:
     symbol: str
     bias: HTFBias = HTFBias.NEUTRAL
-    has_position: bool = False
+    has_position: bool = False          # ranging position
+    has_trending_position: bool = False  # trending position (independent)
     position_candle_count: int = 0
+    trending_candle_count: int = 0
     cooldown: int = 0
 
 
@@ -47,6 +49,7 @@ class FutuBot:
         self.symbols: list[str] = []
         self.states: dict[str, SymbolState] = {}
         self.last_main_scan: datetime | None = None
+        self.last_trending_scan: datetime | None = None
         self.last_htf_scan: datetime | None = None
         self.last_symbol_refresh: datetime | None = None
         self.running: bool = False
@@ -139,10 +142,15 @@ class FutuBot:
             logger.warning("Daily loss cap hit, stopping all trading")
             return
 
-        # Main scan every 15 minutes
+        # Ranging scan every 15 minutes (15m TF)
         if self._should_main_scan(now):
             await self._scan_all_symbols()
             self.last_main_scan = now
+
+        # Trending scan every 1 hour (1H TF)
+        if self.config.trending.enabled and self._should_trending_scan(now):
+            await self._scan_trending_symbols()
+            self.last_trending_scan = now
 
     def _should_refresh_symbols(self, now: datetime) -> bool:
         if self.last_symbol_refresh is None:
@@ -159,6 +167,12 @@ class FutuBot:
             return True
         elapsed = (now - self.last_main_scan).total_seconds()
         return elapsed >= self._tf_to_seconds(self.config.timeframe.main_tf)
+
+    def _should_trending_scan(self, now: datetime) -> bool:
+        if self.last_trending_scan is None:
+            return True
+        elapsed = (now - self.last_trending_scan).total_seconds()
+        return elapsed >= self._tf_to_seconds(self.config.timeframe.trending_tf)
 
     def _tf_to_seconds(self, tf: str) -> int:
         unit = tf[-1]
@@ -185,6 +199,7 @@ class FutuBot:
             await telegram.notify_bias_update(biases)
 
     async def _scan_all_symbols(self):
+        """Scan all symbols for ranging signals on 15m. No position cap — 1 per symbol."""
         open_positions = sum(1 for s in self.states.values() if s.has_position)
         signals_found = 0
 
@@ -199,9 +214,6 @@ class FutuBot:
             if state.cooldown > 0:
                 state.cooldown -= 1
                 continue
-
-            if open_positions >= self.config.risk.max_positions:
-                break
 
             can_trade, reason = self.risk.can_trade_new()
             if not can_trade:
@@ -222,6 +234,85 @@ class FutuBot:
             len(self.symbols), signals_found,
             open_positions, self.config.risk.account_balance,
         )
+
+    async def _scan_trending_symbols(self):
+        """Scan trending symbols for breakout signals on 1H. Independent from ranging."""
+        trending_syms = self.config.trending.symbols
+        signals_found = 0
+
+        for sym in trending_syms:
+            state = self.states.get(sym)
+            if state is None:
+                continue
+
+            if state.has_trending_position:
+                continue
+
+            can_trade, reason = self.risk.can_trade()
+            if not can_trade and "daily loss" in reason:
+                break
+
+            try:
+                candles = await self.exchange.fetch_candles(
+                    self.config.timeframe.trending_tf,
+                    self.config.timeframe.candle_limit,
+                    symbol=sym,
+                )
+                if len(candles) < 50:
+                    continue
+
+                df = compute_all(candles, self.config.indicators)
+                signal = scan_trending_1h(df, self.config.trending, state.bias)
+
+                if signal and signal.type != SignalType.NONE:
+                    rr_ok, rr = self.risk.check_rr(signal)
+                    if not rr_ok:
+                        continue
+                    signal.reason = f"[{sym.split('/')[0]}] {signal.reason}"
+                    logger.info("TREND SIGNAL: %s | R:R %.2f", signal.reason, rr)
+                    signals_found += 1
+                    await self._execute_trending(signal, sym)
+            except Exception as e:
+                logger.warning("Trending scan error %s: %s", sym, e)
+
+            await asyncio.sleep(0.2)
+
+        if signals_found > 0:
+            logger.info("Trending scan: %d signals found", signals_found)
+
+    async def _execute_trending(self, signal: Signal, symbol: str):
+        """Execute trending trade — no fixed TP, only trailing SL."""
+        amount = self.risk.calc_position_size(signal, leverage=self.config.exchange.leverage)
+        if amount <= 0:
+            logger.warning("Trending position size too small for %s", symbol)
+            return
+
+        side = "buy" if signal.type == SignalType.LONG else "sell"
+
+        logger.info(
+            "TRENDING EXEC %s: %s %.6f @ %.2f | SL: %.2f",
+            symbol.split("/")[0], side, amount, signal.entry_price, signal.sl_price,
+        )
+
+        orig_symbol = self.exchange.config.symbol
+        self.exchange.config.symbol = symbol
+        try:
+            order = await self.exchange.place_market_order(
+                side=side, amount=amount,
+                tp_price=None, sl_price=signal.sl_price,
+            )
+            if order.status in ("open", "closed", "filled", "new", "New"):
+                self.states[symbol].has_trending_position = True
+                self.states[symbol].trending_candle_count = 0
+                self.risk.on_trade_opened()
+                logger.info("Trending trade opened: %s %s", symbol.split("/")[0], order.order_id)
+                rr = abs(signal.tp1_price - signal.entry_price) / abs(signal.entry_price - signal.sl_price) if signal.sl_price != signal.entry_price else 0
+                await telegram.notify_signal(
+                    symbol, side, signal.entry_price, signal.sl_price,
+                    signal.tp1_price, amount, rr, "trending", None,
+                )
+        finally:
+            self.exchange.config.symbol = orig_symbol
 
     async def _scan_symbol(self, symbol: str, bias: HTFBias) -> Signal | None:
         candles = await self.exchange.fetch_candles(
@@ -303,60 +394,78 @@ class FutuBot:
 
     async def _monitor_all_positions(self):
         for sym, state in self.states.items():
-            if not state.has_position:
-                continue
-            try:
-                await self._monitor_position(sym, state)
-            except Exception as e:
-                logger.warning("Monitor error %s: %s", sym, e)
+            if state.has_position:
+                try:
+                    await self._monitor_position(sym, state, regime="ranging")
+                except Exception as e:
+                    logger.warning("Monitor error %s ranging: %s", sym, e)
+            if state.has_trending_position:
+                try:
+                    await self._monitor_position(sym, state, regime="trending")
+                except Exception as e:
+                    logger.warning("Monitor error %s trending: %s", sym, e)
 
-    async def _monitor_position(self, symbol: str, state: SymbolState):
+    async def _monitor_position(self, symbol: str, state: SymbolState, regime: str = "ranging"):
         orig_symbol = self.exchange.config.symbol
         self.exchange.config.symbol = symbol
         try:
             position = await self.exchange.get_position()
             if position is None:
                 real_pnl = await self.exchange.get_closed_pnl(symbol)
-                state.has_position = False
+                if regime == "trending":
+                    state.has_trending_position = False
+                else:
+                    state.has_position = False
                 self.risk.on_trade_closed(real_pnl)
-                logger.info("%s position closed (TP/SL hit) PnL: $%.2f", symbol.split("/")[0], real_pnl)
+                logger.info("%s %s closed (TP/SL hit) PnL: $%.2f",
+                            symbol.split("/")[0], regime, real_pnl)
                 await telegram.notify_close(
                     symbol, real_pnl, "TP/SL hit", self.config.risk.account_balance,
                 )
                 return
 
-            state.position_candle_count += 1
+            if regime == "trending":
+                state.trending_candle_count += 1
+                max_candles = self.config.trending.max_hold_bars
+                candle_count = state.trending_candle_count
+            else:
+                state.position_candle_count += 1
+                max_candles = self.config.strategy.ranging_max_candles
+                candle_count = state.position_candle_count
 
-            # Time exit for ranging
-            if state.position_candle_count >= self.config.strategy.ranging_max_candles:
-                logger.info("%s time exit after %d candles", symbol.split("/")[0], state.position_candle_count)
+            # Time exit
+            if candle_count >= max_candles:
+                logger.info("%s %s time exit after %d candles",
+                            symbol.split("/")[0], regime, candle_count)
                 await self.exchange.close_position()
                 pnl = position["unrealized_pnl"]
-                state.has_position = False
+                if regime == "trending":
+                    state.has_trending_position = False
+                else:
+                    state.has_position = False
                 self.risk.on_trade_closed(pnl)
                 if pnl < 0:
                     state.cooldown = self.config.risk.cooldown_candles
                 await telegram.notify_close(
-                    symbol, pnl, f"Time exit ({state.position_candle_count} candles)",
+                    symbol, pnl, f"{regime} time exit ({candle_count} bars)",
                     self.config.risk.account_balance,
                 )
                 return
 
-            # Trailing SL with activation price
-            # Only activate trailing after position is profitable (>0.3%)
+            # Trailing SL (chandelier) — activate after >0.3% profit
             entry = position["entry_price"]
             notional = entry * position["size"] if position["size"] > 0 else 1
             pnl_pct = position["unrealized_pnl"] / notional
 
             if pnl_pct > 0.003:
-                candles = await self.exchange.fetch_candles(self.config.timeframe.main_tf, 30, symbol=symbol)
+                tf = self.config.timeframe.trending_tf if regime == "trending" else self.config.timeframe.main_tf
+                candles = await self.exchange.fetch_candles(tf, 30, symbol=symbol)
                 df = compute_all(candles, self.config.indicators)
                 row = df.iloc[-1]
                 new_sl = None
 
                 if position["side"] == "long":
                     chandelier = row["chandelier_long"]
-                    # Only ratchet up, never down
                     if chandelier > entry:
                         new_sl = chandelier
                 elif position["side"] == "short":
@@ -366,8 +475,8 @@ class FutuBot:
 
                 if new_sl is not None:
                     logger.info(
-                        "%s trailing SL activated: %.2f (pnl: %.2f%%)",
-                        symbol.split("/")[0], new_sl, pnl_pct * 100,
+                        "%s %s trailing SL: %.2f (pnl: %.2f%%)",
+                        symbol.split("/")[0], regime, new_sl, pnl_pct * 100,
                     )
                     await self.exchange.update_tp_sl(sl_price=new_sl)
         finally:
