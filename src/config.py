@@ -78,6 +78,12 @@ class RiskConfig:
     risk_per_trade_main: float = 0.05
     risk_per_trade_scalp: float = 0.01
     max_daily_loss_pct: float = 0.06
+    ranging_symbols: list = field(default_factory=lambda: [
+        "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT",
+        "BNB/USDT:USDT", "XRP/USDT:USDT", "DOGE/USDT:USDT",
+        "ADA/USDT:USDT", "AVAX/USDT:USDT", "LINK/USDT:USDT",
+        "SUI/USDT:USDT",
+    ])
     max_positions: int = 999  # unlimited, 1 per symbol per regime
     max_symbols: int = 20
     cooldown_candles: int = 0
@@ -113,12 +119,8 @@ class TrendingConfig:
     sl_atr: float = 2.5
     max_hold_bars: int = 48  # 48h on 1H
     # Only trade top volume symbols for trending
-    symbols: list = field(default_factory=lambda: [
-        "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT",
-        "BNB/USDT:USDT", "XRP/USDT:USDT", "DOGE/USDT:USDT",
-        "ADA/USDT:USDT", "AVAX/USDT:USDT", "LINK/USDT:USDT",
-        "SUI/USDT:USDT",
-    ])
+    use_top_volume: bool = True  # auto top 20 volume for trending
+    symbols: list = field(default_factory=list)  # empty = use top volume
 
 
 @dataclass

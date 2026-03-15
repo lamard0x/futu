@@ -71,6 +71,11 @@ class FutuBot:
 
         await self.exchange.connect()
         await self._refresh_symbols()
+        # Setup ranging symbols (fixed list)
+        for sym in self.config.risk.ranging_symbols:
+            if sym not in self.states:
+                self.states[sym] = SymbolState(symbol=sym)
+                await self.exchange.setup_symbol(sym)
         await self._sync_open_positions()
         await telegram.notify_startup(self.symbols, self.config.risk.account_balance)
         self.cmd_listener = CommandListener(self)
@@ -264,12 +269,13 @@ class FutuBot:
             await telegram.notify_bias_update(biases)
 
     async def _scan_all_symbols(self, tf: str = None):
-        """Multi-TF ranging scan: 15m detects setup, 5m confirms entry."""
+        """Multi-TF ranging scan on fixed large-cap list."""
         scan_tf = tf or self.config.timeframe.main_tf
         open_positions = sum(1 for s in self.states.values() if s.has_position)
         signals_found = 0
 
-        for sym in self.symbols:
+        ranging_syms = self.config.risk.ranging_symbols
+        for sym in ranging_syms:
             state = self.states.get(sym)
             if state is None:
                 continue
@@ -352,14 +358,17 @@ class FutuBot:
             logger.warning("Heartbeat notify failed: %s", e)
 
     async def _scan_trending_symbols(self):
-        """Scan trending symbols for breakout signals on 1H. Independent from ranging."""
-        trending_syms = self.config.trending.symbols
+        """Scan top volume symbols for breakout signals on 1H."""
+        # Use auto top volume list (refreshed every hour)
+        trending_syms = self.symbols  # from _refresh_symbols (top 20 volume)
         signals_found = 0
 
         for sym in trending_syms:
             state = self.states.get(sym)
             if state is None:
-                continue
+                self.states[sym] = SymbolState(symbol=sym)
+                await self.exchange.setup_symbol(sym)
+                state = self.states[sym]
 
             if state.has_trending_position:
                 continue
