@@ -298,5 +298,25 @@ def scan_main(df_15m: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias = HTFBias
     return check_ranging_short(df_15m, cfg, bias)
 
 
+def confirm_on_5m(df_5m: pd.DataFrame, signal: Signal) -> bool:
+    """Check if 5m data confirms the 15m signal direction."""
+    if len(df_5m) < 10:
+        return False
+    row = df_5m.iloc[-1]
+    rsi = row.get("rsi") or 50
+    close = row["close"]
+    bb_lower = row.get("bb_lower") or 0
+    bb_upper = row.get("bb_upper") or 0
+    bb_mid = row.get("bb_mid") or 0
+
+    if signal.type == SignalType.LONG:
+        # 5m confirms: price near/below BB lower or RSI < 45
+        return (bb_lower > 0 and close <= bb_mid) or rsi < 45
+    elif signal.type == SignalType.SHORT:
+        # 5m confirms: price near/above BB upper or RSI > 55
+        return (bb_upper > 0 and close >= bb_mid) or rsi > 55
+    return False
+
+
 def scan_alert(df_1m: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias = HTFBias.NEUTRAL) -> Signal | None:
     return check_alert_signal(df_1m, cfg, bias)

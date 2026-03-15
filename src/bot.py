@@ -8,7 +8,7 @@ from src.config import Config
 from src.exchange import Exchange
 from src.indicators import compute_all
 from src.strategy import (
-    scan_main, scan_alert, scan_trending_1h, detect_htf_bias,
+    scan_main, scan_alert, scan_trending_1h, confirm_on_5m, detect_htf_bias,
     Signal, SignalType, SignalSource, Regime, HTFBias,
 )
 from src.risk import RiskManager
@@ -39,6 +39,8 @@ class SymbolState:
     position_candle_count: int = 0
     trending_candle_count: int = 0
     cooldown: int = 0
+    pending_signal: Signal | None = None  # 15m signal waiting for 5m confirm
+    pending_ticks: int = 0                # how many ticks waiting for confirm
 
 
 class FutuBot:
@@ -49,6 +51,7 @@ class FutuBot:
         self.symbols: list[str] = []
         self.states: dict[str, SymbolState] = {}
         self.last_main_scan: datetime | None = None
+        self.last_5m_scan: datetime | None = None
         self.last_trending_scan: datetime | None = None
         self.last_htf_scan: datetime | None = None
         self.last_symbol_refresh: datetime | None = None
@@ -186,11 +189,15 @@ class FutuBot:
             logger.warning("Daily loss cap hit, stopping all trading")
             return
 
-        # Ranging scan every 15 minutes (15m TF)
+        # 15m scan: detect ranging setups
         if self._should_main_scan(now):
-            await self._scan_all_symbols()
+            await self._scan_all_symbols(self.config.timeframe.main_tf)
             self.last_main_scan = now
-            logger.info("Ranging scan complete, next in %s", self.config.timeframe.main_tf)
+
+        # 5m scan: confirm pending 15m signals
+        if self._should_5m_confirm(now):
+            await self._scan_all_symbols(self.config.timeframe.confirm_tf)
+            self.last_5m_scan = now
 
         # Trending scan every 1 hour (1H TF)
         if self.config.trending.enabled and self._should_trending_scan(now):
@@ -215,6 +222,15 @@ class FutuBot:
             return True
         elapsed = (now - self.last_main_scan).total_seconds()
         return elapsed >= self._tf_to_seconds(self.config.timeframe.main_tf)
+
+    def _should_5m_confirm(self, now: datetime) -> bool:
+        # Only run if there are pending signals
+        has_pending = any(s.pending_signal for s in self.states.values())
+        if not has_pending:
+            return False
+        if self.last_5m_scan is None:
+            return True
+        return (now - self.last_5m_scan).total_seconds() >= 300  # 5min
 
     def _should_trending_scan(self, now: datetime) -> bool:
         if self.last_trending_scan is None:
@@ -246,8 +262,9 @@ class FutuBot:
         if biases:
             await telegram.notify_bias_update(biases)
 
-    async def _scan_all_symbols(self):
-        """Scan all symbols for ranging signals on 15m. No position cap — 1 per symbol."""
+    async def _scan_all_symbols(self, tf: str = None):
+        """Multi-TF ranging scan: 15m detects setup, 5m confirms entry."""
+        scan_tf = tf or self.config.timeframe.main_tf
         open_positions = sum(1 for s in self.states.values() if s.has_position)
         signals_found = 0
 
@@ -255,12 +272,7 @@ class FutuBot:
             state = self.states.get(sym)
             if state is None:
                 continue
-
             if state.has_position:
-                continue
-
-            if state.cooldown > 0:
-                state.cooldown -= 1
                 continue
 
             can_trade, reason = self.risk.can_trade_new()
@@ -268,13 +280,59 @@ class FutuBot:
                 break
 
             try:
-                signal = await asyncio.wait_for(
-                    self._scan_symbol(sym, state.bias), timeout=30,
-                )
-                if signal and signal.type != SignalType.NONE:
-                    signals_found += 1
-                    await self._execute_signal(signal, sym)
-                    open_positions += 1
+                # Check pending signals waiting for 5m confirm
+                if state.pending_signal and scan_tf == self.config.timeframe.confirm_tf:
+                    state.pending_ticks += 1
+                    candles_5m = await self.exchange.fetch_candles(
+                        self.config.timeframe.confirm_tf, 50, symbol=sym)
+                    if len(candles_5m) >= 10:
+                        df_5m = compute_all(candles_5m, self.config.indicators)
+                        confirmed = confirm_on_5m(df_5m, state.pending_signal)
+                        if confirmed:
+                            logger.info("5m CONFIRMED %s %s",
+                                        sym.split("/")[0], state.pending_signal.type.value)
+                            signals_found += 1
+                            await self._execute_signal(state.pending_signal, sym)
+                            open_positions += 1
+                            state.pending_signal = None
+                            state.pending_ticks = 0
+                        elif state.pending_ticks >= 3:
+                            # 3 ticks (15min) without 5m confirm → execute on 15m signal alone
+                            logger.info("15m FORCE ENTRY %s (no 5m confirm after %d ticks)",
+                                        sym.split("/")[0], state.pending_ticks)
+                            signals_found += 1
+                            await self._execute_signal(state.pending_signal, sym)
+                            open_positions += 1
+                            state.pending_signal = None
+                            state.pending_ticks = 0
+                    continue
+
+                # 15m scan: detect setup
+                if scan_tf == self.config.timeframe.main_tf:
+                    signal = await asyncio.wait_for(
+                        self._scan_symbol(sym, state.bias), timeout=30)
+                    if signal and signal.type != SignalType.NONE:
+                        # Try immediate 5m confirm
+                        try:
+                            candles_5m = await self.exchange.fetch_candles(
+                                self.config.timeframe.confirm_tf, 50, symbol=sym)
+                            if len(candles_5m) >= 10:
+                                df_5m = compute_all(candles_5m, self.config.indicators)
+                                if confirm_on_5m(df_5m, signal):
+                                    logger.info("INSTANT CONFIRM %s %s",
+                                                sym.split("/")[0], signal.type.value)
+                                    signals_found += 1
+                                    await self._execute_signal(signal, sym)
+                                    open_positions += 1
+                                    continue
+                        except Exception:
+                            pass
+                        # No immediate confirm → queue for 5m check
+                        state.pending_signal = signal
+                        state.pending_ticks = 0
+                        logger.info("15m SIGNAL %s %s — waiting 5m confirm",
+                                    sym.split("/")[0], signal.type.value)
+
             except asyncio.TimeoutError:
                 logger.warning("Scan timeout %s", sym.split("/")[0])
             except Exception as e:

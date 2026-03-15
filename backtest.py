@@ -6,6 +6,7 @@ Usage: python backtest.py
 import asyncio
 import logging
 import math
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 
@@ -31,7 +32,8 @@ STRAT_CFG = StrategyConfig()
 RISK_CFG = RiskConfig()
 BALANCE_START = 300.0
 LEVERAGE = 10
-DAYS = 60
+DAYS = int(sys.argv[1]) if len(sys.argv) > 1 else 60
+MAIN_TF = sys.argv[2] if len(sys.argv) > 2 else "5m"
 MAX_RANGING_POS = 999   # unlimited — chỉ giới hạn 1 per symbol
 MAX_TRENDING_POS = 999  # unlimited — chỉ giới hạn 1 per symbol
 
@@ -46,7 +48,10 @@ SYMBOLS_TO_TEST = [
     "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT",
     "BNB/USDT:USDT", "XRP/USDT:USDT", "XAU/USDT:USDT",
     "AXS/USDT:USDT", "FIL/USDT:USDT", "ICP/USDT:USDT",
-    "BCH/USDT:USDT", "YFI/USDT:USDT",
+    "BCH/USDT:USDT", "YFI/USDT:USDT", "DOGE/USDT:USDT",
+    "ADA/USDT:USDT", "AVAX/USDT:USDT", "LINK/USDT:USDT",
+    "SUI/USDT:USDT", "NEAR/USDT:USDT", "PEPE/USDT:USDT",
+    "WIF/USDT:USDT", "TRX/USDT:USDT",
 ]
 
 # Trending only on top 5 volume (major, less chop)
@@ -111,10 +116,9 @@ def calc_position_size(balance, entry, sl, risk_pct, leverage):
     sl_dist = abs(entry - sl) / entry
     if sl_dist == 0:
         return 0.0, 0.0
-    risk_amount = balance * risk_pct
+    risk_amount = BALANCE_START * risk_pct  # Always size on STARTING balance, not compound
     pos_value = risk_amount / sl_dist
-    # Cap by total margin available
-    max_notional = balance * leverage
+    max_notional = BALANCE_START * leverage  # Cap at starting balance * leverage
     pos_value = min(pos_value, max_notional)
     amount = pos_value / entry
     return amount, pos_value
@@ -278,7 +282,7 @@ def update_trailing_sl(trade, row):
             trade.sl_price = chand_short
 
 
-async def fetch_ohlcv(ex, symbol, tf, since_ms, limit=1000):
+async def fetch_ohlcv(ex, symbol, tf, since_ms, limit=300):
     all_candles = []
     current = since_ms
     while True:
@@ -311,14 +315,14 @@ async def run_backtest():
     log.info("FUTU Dual Strategy Backtest — %d Days — OKX Fees", DAYS)
     log.info("Balance: $%.0f | Leverage: %dx | Fee: %.2f%%",
              BALANCE_START, LEVERAGE, TAKER_FEE * 100)
-    log.info("Ranging: %d slots | Trending: %d slots", MAX_RANGING_POS, MAX_TRENDING_POS)
+    log.info("Ranging TF: %s | Trending: 1H", MAIN_TF)
     log.info("=" * 60)
 
     ex = ccxt.okx({"options": {"defaultType": "swap"}})
     await ex.load_markets()
 
     now = datetime.now(timezone.utc)
-    since = now - timedelta(days=DAYS + 2)
+    since = now - timedelta(days=DAYS + 5)
     since_ms = int(since.timestamp() * 1000)
     backtest_start = now - timedelta(days=DAYS)
 
@@ -332,30 +336,25 @@ async def run_backtest():
         short = symbol.split("/")[0]
         log.info("\n--- %s ---", short)
 
-        raw_5m = await fetch_ohlcv(ex, symbol, "5m", since_ms)
-        raw_15m = await fetch_ohlcv(ex, symbol, "15m", since_ms)
+        raw_main = await fetch_ohlcv(ex, symbol, MAIN_TF, since_ms)
         raw_4h = await fetch_ohlcv(ex, symbol, "4h", since_ms)
         is_trending_sym = symbol in TRENDING_SYMBOLS
         raw_1h = await fetch_ohlcv(ex, symbol, "1h", since_ms) if is_trending_sym else []
 
-        if len(raw_15m) < 100 or len(raw_4h) < 20 or len(raw_5m) < 200:
+        if len(raw_main) < 200 or len(raw_4h) < 20:
             log.info("SKIP %s — not enough data", short)
             continue
         if is_trending_sym and len(raw_1h) < 50:
             log.info("SKIP %s trending — not enough 1H data", short)
             is_trending_sym = False
 
-        df_5m = ohlcv_to_df(raw_5m)
-        df_15m = ohlcv_to_df(raw_15m)
+        df_main = ohlcv_to_df(raw_main)
         df_1h = ohlcv_to_df(raw_1h) if is_trending_sym else None
         df_4h = ohlcv_to_df(raw_4h)
 
-        candles_5m = [{"timestamp": int(ts.timestamp() * 1000), "open": r["open"], "high": r["high"],
-                       "low": r["low"], "close": r["close"], "volume": r["volume"]}
-                      for ts, r in df_5m.iterrows()]
-        candles_15m = [{"timestamp": int(ts.timestamp() * 1000), "open": r["open"], "high": r["high"],
-                        "low": r["low"], "close": r["close"], "volume": r["volume"]}
-                       for ts, r in df_15m.iterrows()]
+        candles_main = [{"timestamp": int(ts.timestamp() * 1000), "open": r["open"], "high": r["high"],
+                         "low": r["low"], "close": r["close"], "volume": r["volume"]}
+                        for ts, r in df_main.iterrows()]
         candles_1h = ([{"timestamp": int(ts.timestamp() * 1000), "open": r["open"], "high": r["high"],
                         "low": r["low"], "close": r["close"], "volume": r["volume"]}
                        for ts, r in df_1h.iterrows()] if is_trending_sym else [])
@@ -364,8 +363,7 @@ async def run_backtest():
                        "low": r["low"], "close": r["close"], "volume": r["volume"]}
                       for ts, r in df_4h.iterrows()]
 
-        df_5m_ind = compute_all(candles_5m, IND_CFG)
-        df_15m_ind = compute_all(candles_15m, IND_CFG)
+        df_main_ind = compute_all(candles_main, IND_CFG)
         df_1h_ind = compute_all(candles_1h, IND_CFG) if is_trending_sym else None
         df_4h_ind = compute_all(candles_4h, IND_CFG)
 
@@ -412,12 +410,13 @@ async def run_backtest():
             if dd > state.max_drawdown:
                 state.max_drawdown = dd
 
-        # ═══ PASS 0: Ranging on 5m ═══
-        for i in range(IND_CFG.ema_slow + 5, len(df_5m_ind)):
-            bar_time = df_5m_ind.index[i]
+        # ═══ Ranging on 5m (single pass, matches live scan) ═══
+        last_close_bar = {}  # {symbol: bar_index} — prevent instant re-entry
+        for i in range(IND_CFG.ema_slow + 5, len(df_main_ind)):
+            bar_time = df_main_ind.index[i]
             if bar_time.replace(tzinfo=timezone.utc) < backtest_start:
                 continue
-            row = df_5m_ind.iloc[i]
+            row = df_main_ind.iloc[i]
 
             day_str = bar_time.strftime("%Y-%m-%d")
             if state.daily_date != day_str:
@@ -434,13 +433,15 @@ async def run_backtest():
                 if result:
                     close_trade(t, result[0], result[1], bar_time)
                     closed.append(t)
+                    last_close_bar[symbol] = i
             for t in closed:
                 state.open_ranging.remove(t)
 
-            if state.cooldown > 0:
-                state.cooldown -= 1
-                continue
             if state.daily_loss >= state.balance * RISK_CFG.max_daily_loss_pct:
+                continue
+
+            # Must wait at least 1 bar after close before re-entry
+            if symbol in last_close_bar and i <= last_close_bar[symbol] + 1:
                 continue
 
             bias = get_bias(bar_time)
@@ -458,56 +459,9 @@ async def run_backtest():
                         state.open_ranging.append(trade)
                         sym_ranging += 1
 
-        # ═══ PASS 1: Ranging on 15m ═══
-        for i in range(IND_CFG.ema_slow + 5, len(df_15m_ind)):
-            bar_time = df_15m_ind.index[i]
-            if bar_time.replace(tzinfo=timezone.utc) < backtest_start:
-                continue
-            row = df_15m_ind.iloc[i]
-
-            day_str = bar_time.strftime("%Y-%m-%d")
-            if state.daily_date != day_str:
-                state.daily_loss = 0.0
-                state.daily_date = day_str
-
-            # Exit check for ranging positions
-            closed = []
-            for t in state.open_ranging:
-                if t.symbol != symbol:
-                    continue
-                t.candles_held += 1
-                update_trailing_sl(t, row)
-                result = check_exit(t, row, t.candles_held)
-                if result:
-                    close_trade(t, result[0], result[1], bar_time)
-                    closed.append(t)
-            for t in closed:
-                state.open_ranging.remove(t)
-
-            if state.cooldown > 0:
-                state.cooldown -= 1
-                continue
-            if state.daily_loss >= state.balance * RISK_CFG.max_daily_loss_pct:
-                continue
-
-            bias = get_bias(bar_time)
-            if not any(t.symbol == symbol for t in state.open_ranging):
-                rsig = scan_ranging(row, bias, STRAT_CFG)
-                if rsig:
-                    amt, notional = calc_position_size(
-                        state.balance, rsig["entry"], rsig["sl"],
-                        RISK_CFG.risk_per_trade_main, LEVERAGE)
-                    if amt > 0:
-                        trade = Trade(symbol=symbol, side=rsig["side"], regime="ranging",
-                                      entry_price=rsig["entry"], sl_price=rsig["sl"],
-                                      tp_price=rsig["tp"], size=amt, notional=notional,
-                                      entry_time=str(bar_time))
-                        state.open_ranging.append(trade)
-                        sym_ranging += 1
-
-        # ═══ PASS 2: Trending on 1H (top volume symbols only) ═══
+        # ═══ Trending on 1H (top volume symbols only) ═══
         if symbol not in TRENDING_SYMBOLS:
-            log.info("%s: %d ranging (15m) + 0 trending (skip)", short, sym_ranging)
+            log.info("%s: %d ranging + 0 trending (skip)", short, sym_ranging)
             await asyncio.sleep(0.2)
             continue
 
@@ -556,7 +510,7 @@ async def run_backtest():
                         state.open_trending.append(trade)
                         sym_trending += 1
 
-        log.info("%s: %d ranging (15m) + %d trending (1H)", short, sym_ranging, sym_trending)
+        log.info("%s: %d ranging + %d trending (1H)", short, sym_ranging, sym_trending)
         await asyncio.sleep(0.2)
 
     await ex.close()

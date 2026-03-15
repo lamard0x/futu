@@ -75,7 +75,7 @@ class StrategyConfig:
 @dataclass
 class RiskConfig:
     account_balance: float = 300.0
-    risk_per_trade_main: float = 0.02
+    risk_per_trade_main: float = 0.05
     risk_per_trade_scalp: float = 0.01
     max_daily_loss_pct: float = 0.06
     max_positions: int = 999  # unlimited, 1 per symbol per regime
@@ -122,7 +122,8 @@ class TrendingConfig:
 @dataclass
 class TimeframeConfig:
     htf: str = "4h"
-    main_tf: str = "5m"
+    main_tf: str = "15m"
+    confirm_tf: str = "5m"
     trending_tf: str = "1h"
     alert_tf: str = "1m"
     candle_limit: int = 200
