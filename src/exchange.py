@@ -221,50 +221,39 @@ class Exchange:
             logger.warning("Update TP/SL error: %s", e)
 
     async def _update_tp_sl_generic(self, tp_price, sl_price):
+        """Update TP/SL on OKX using algo order amendment."""
         try:
+            # OKX: fetch existing algo orders (TP/SL), cancel and replace
+            await self.rate_limiter.acquire("fetch_open_orders")
+            open_orders = await self.exchange.fetch_open_orders(self.config.symbol)
+
+            # Cancel existing TP/SL algo orders
+            for order in open_orders:
+                try:
+                    await self.rate_limiter.acquire("cancel_order")
+                    await self.exchange.cancel_order(order["id"], self.config.symbol)
+                except Exception:
+                    pass
+
             position = await self.get_position()
             if position is None:
                 return
             close_side = "sell" if position["side"] == "long" else "buy"
-            await self.rate_limiter.acquire("cancel_all_orders")
-            await self.exchange.cancel_all_orders(self.config.symbol)
 
-            # Try OCO (one-cancels-other) first
-            if tp_price is not None and sl_price is not None:
-                try:
-                    await self.rate_limiter.acquire("create_order")
-                    await self.exchange.create_order(
-                        symbol=self.config.symbol, type="oco",
-                        side=close_side, amount=position["size"],
-                        price=tp_price,
-                        params={
-                            "stopPrice": sl_price,
-                            "reduceOnly": True,
-                        },
-                    )
-                    logger.info("OCO order set: TP=%.2f SL=%.2f", tp_price, sl_price)
-                    return
-                except Exception:
-                    pass  # Fallback to separate orders
-
+            # Place new SL
             if sl_price is not None:
                 await self.rate_limiter.acquire("create_order")
+                params = {"reduceOnly": True}
+                if self.exchange_name == "okx":
+                    params["tdMode"] = self.config.margin_mode
                 await self.exchange.create_order(
                     symbol=self.config.symbol, type="stop",
                     side=close_side, amount=position["size"],
-                    price=sl_price,
-                    params={"stopPrice": sl_price, "reduceOnly": True},
+                    price=None,
+                    params={**params, "stopPrice": sl_price, "triggerPrice": sl_price},
                 )
-            if tp_price is not None:
-                await self.rate_limiter.acquire("create_order")
-                await self.exchange.create_order(
-                    symbol=self.config.symbol, type="limit",
-                    side=close_side, amount=position["size"],
-                    price=tp_price,
-                    params={"reduceOnly": True},
-                )
-            logger.info("TP/SL updated: TP=%.2f SL=%.2f", tp_price or 0, sl_price or 0)
-        except ccxt.ExchangeError as e:
+            logger.info("Trailing SL updated: %.2f", sl_price or 0)
+        except Exception as e:
             logger.warning("Update TP/SL error: %s", e)
 
     async def cancel_all_orders(self):
