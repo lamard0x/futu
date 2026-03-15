@@ -575,41 +575,12 @@ class FutuBot:
                 )
                 return
 
-            # Partial close: when TP1 nearly hit, close 50% + move SL to entry
+            # Trailing SL (chandelier) — activate after >0.3% profit
             entry = position["entry_price"]
-            size = position["size"]
-            notional = entry * size if size > 0 else 1
+            notional = entry * position["size"] if position["size"] > 0 else 1
             pnl_pct = position["unrealized_pnl"] / notional
 
-            if not state.partial_closed and pnl_pct > 0.005:
-                # Close 50% at current price
-                half = size * self.config.strategy.partial_close_pct
-                close_side = "sell" if position["side"] == "long" else "buy"
-                try:
-                    await self.exchange.exchange.create_order(
-                        symbol=symbol, type="market",
-                        side=close_side, amount=half,
-                        params={"reduceOnly": True,
-                                "tdMode": self.exchange.config.margin_mode},
-                    )
-                    state.partial_closed = True
-                    # Move SL to entry (breakeven)
-                    await self.exchange.update_tp_sl(sl_price=entry)
-                    logger.info(
-                        "%s %s PARTIAL CLOSE 50%% @ pnl %.2f%% — SL moved to entry",
-                        symbol.split("/")[0], regime, pnl_pct * 100,
-                    )
-                    await telegram.send_message(
-                        f"✂️ <b>PARTIAL CLOSE</b>\n"
-                        f"🪙 {symbol.split('/')[0]} | 50% closed\n"
-                        f"📍 SL → entry (breakeven)\n"
-                        f"💰 PnL so far: {pnl_pct*100:.2f}%"
-                    )
-                except Exception as e:
-                    logger.warning("Partial close error %s: %s", symbol.split("/")[0], e)
-
-            # Trailing SL (chandelier) — after partial close or >0.3% profit
-            if state.partial_closed or pnl_pct > 0.003:
+            if pnl_pct > 0.003:
                 tf = self.config.timeframe.trending_tf if regime == "trending" else self.config.timeframe.main_tf
                 candles = await self.exchange.fetch_candles(tf, 30, symbol=symbol)
                 df = compute_all(candles, self.config.indicators)
