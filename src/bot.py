@@ -551,7 +551,7 @@ class FutuBot:
                 candle_count = state.position_candle_count
 
             # Time exit
-            if candle_count >= max_candles:
+            if max_candles > 0 and candle_count >= max_candles:
                 logger.info("%s %s time exit after %d candles",
                             symbol.split("/")[0], regime, candle_count)
                 await self.exchange.close_position()

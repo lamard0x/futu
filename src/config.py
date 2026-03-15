@@ -69,7 +69,7 @@ class StrategyConfig:
     partial_close_pct: float = 0.5
 
     # Ranging time exit
-    ranging_max_candles: int = 15
+    ranging_max_candles: int = 0  # disabled — let TP/SL handle exit
 
 
 @dataclass
