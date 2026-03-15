@@ -122,7 +122,7 @@ class TrendingConfig:
 @dataclass
 class TimeframeConfig:
     htf: str = "4h"
-    main_tf: str = "15m"
+    main_tf: str = "5m"
     trending_tf: str = "1h"
     alert_tf: str = "1m"
     candle_limit: int = 200

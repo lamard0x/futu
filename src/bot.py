@@ -154,8 +154,8 @@ class FutuBot:
                     await self._tick()
                 except Exception as e:
                     logger.error("Tick error: %s", e, exc_info=True)
-            logger.info("Sleeping 60s until next tick...")
-            await asyncio.sleep(60)
+            logger.info("Sleeping 30s until next tick...")
+            await asyncio.sleep(30)
 
     async def _tick(self):
         now = datetime.now(timezone.utc)
