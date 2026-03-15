@@ -41,6 +41,7 @@ class SymbolState:
     cooldown: int = 0
     pending_signal: Signal | None = None  # 15m signal waiting for 5m confirm
     pending_ticks: int = 0                # how many ticks waiting for confirm
+    partial_closed: bool = False          # TP1 hit, 50% closed, trailing rest
 
 
 class FutuBot:
@@ -396,17 +397,19 @@ class FutuBot:
             logger.info("Trending scan: %d signals found", signals_found)
 
     async def _execute_trending(self, signal: Signal, symbol: str):
-        """Execute trending trade — no fixed TP, only trailing SL."""
+        """Execute trending trade with TP1 + trailing SL."""
         amount = self.risk.calc_position_size(signal, leverage=self.config.exchange.leverage)
         if amount <= 0:
             logger.warning("Trending position size too small for %s", symbol)
             return
 
         side = "buy" if signal.type == SignalType.LONG else "sell"
+        tp_target = signal.tp1_price
 
         logger.info(
-            "TRENDING EXEC %s: %s %.6f @ %.2f | SL: %.2f",
-            symbol.split("/")[0], side, amount, signal.entry_price, signal.sl_price,
+            "TRENDING EXEC %s: %s %.6f @ %.2f | SL: %.2f | TP: %.2f",
+            symbol.split("/")[0], side, amount, signal.entry_price,
+            signal.sl_price, tp_target,
         )
 
         orig_symbol = self.exchange.config.symbol
@@ -414,11 +417,12 @@ class FutuBot:
         try:
             order = await self.exchange.place_market_order(
                 side=side, amount=amount,
-                tp_price=None, sl_price=signal.sl_price,
+                tp_price=tp_target, sl_price=signal.sl_price,
             )
             if order.status not in ("canceled", "cancelled", "rejected", "expired"):
                 self.states[symbol].has_trending_position = True
                 self.states[symbol].trending_candle_count = 0
+                self.states[symbol].partial_closed = False
                 self.risk.on_trade_opened()
                 logger.info("Trending trade opened: %s %s", symbol.split("/")[0], order.order_id)
                 rr = abs(signal.tp1_price - signal.entry_price) / abs(signal.entry_price - signal.sl_price) if signal.sl_price != signal.entry_price else 0
@@ -481,6 +485,7 @@ class FutuBot:
             if order.status not in ("canceled", "cancelled", "rejected", "expired"):
                 self.states[symbol].has_position = True
                 self.states[symbol].position_candle_count = 0
+                self.states[symbol].partial_closed = False
                 self.risk.on_trade_opened()
                 logger.info("Trade opened: %s %s", symbol.split("/")[0], order.order_id)
                 try:
@@ -570,12 +575,41 @@ class FutuBot:
                 )
                 return
 
-            # Trailing SL (chandelier) — activate after >0.3% profit
+            # Partial close: when TP1 nearly hit, close 50% + move SL to entry
             entry = position["entry_price"]
-            notional = entry * position["size"] if position["size"] > 0 else 1
+            size = position["size"]
+            notional = entry * size if size > 0 else 1
             pnl_pct = position["unrealized_pnl"] / notional
 
-            if pnl_pct > 0.003:
+            if not state.partial_closed and pnl_pct > 0.005:
+                # Close 50% at current price
+                half = size * self.config.strategy.partial_close_pct
+                close_side = "sell" if position["side"] == "long" else "buy"
+                try:
+                    await self.exchange.exchange.create_order(
+                        symbol=symbol, type="market",
+                        side=close_side, amount=half,
+                        params={"reduceOnly": True,
+                                "tdMode": self.exchange.config.margin_mode},
+                    )
+                    state.partial_closed = True
+                    # Move SL to entry (breakeven)
+                    await self.exchange.update_tp_sl(sl_price=entry)
+                    logger.info(
+                        "%s %s PARTIAL CLOSE 50%% @ pnl %.2f%% — SL moved to entry",
+                        symbol.split("/")[0], regime, pnl_pct * 100,
+                    )
+                    await telegram.send_message(
+                        f"✂️ <b>PARTIAL CLOSE</b>\n"
+                        f"🪙 {symbol.split('/')[0]} | 50% closed\n"
+                        f"📍 SL → entry (breakeven)\n"
+                        f"💰 PnL so far: {pnl_pct*100:.2f}%"
+                    )
+                except Exception as e:
+                    logger.warning("Partial close error %s: %s", symbol.split("/")[0], e)
+
+            # Trailing SL (chandelier) — after partial close or >0.3% profit
+            if state.partial_closed or pnl_pct > 0.003:
                 tf = self.config.timeframe.trending_tf if regime == "trending" else self.config.timeframe.main_tf
                 candles = await self.exchange.fetch_candles(tf, 30, symbol=symbol)
                 df = compute_all(candles, self.config.indicators)
