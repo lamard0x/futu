@@ -68,8 +68,8 @@ class RiskManager:
             return 0.0
         position_value = risk_amount / sl_distance_pct
 
-        # Cap notional by available margin (balance * leverage / max_positions)
-        max_notional = (self.config.account_balance * leverage) / max(self.config.max_positions, 1)
+        # Cap notional by total available margin
+        max_notional = self.config.account_balance * leverage
         if position_value > max_notional:
             logger.info(
                 "Size capped: $%.0f -> $%.0f (margin limit)",
