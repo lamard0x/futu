@@ -169,7 +169,8 @@ class CommandListener:
 
     async def _cmd_status(self):
         bot = self.bot
-        open_pos = sum(1 for s in bot.states.values() if s.has_position)
+        open_pos = sum(1 for s in bot.states.values()
+                       if s.has_position or s.has_trending_position)
         status = "🟢 TRADING" if bot.running else "🔴 PAUSED"
         text = (
             f"<b>{status}</b>\n"
@@ -190,7 +191,8 @@ class CommandListener:
         await send_message("🔴 <b>Trading PAUSED</b>\nPositions still monitored.")
 
     async def _cmd_positions(self):
-        open_syms = [s for s, st in self.bot.states.items() if st.has_position]
+        open_syms = [s for s, st in self.bot.states.items()
+                     if st.has_position or st.has_trending_position]
         if not open_syms:
             await send_message("📭 No open positions")
             return

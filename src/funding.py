@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from src.config import Config
 from src.exchange import Exchange
@@ -167,6 +167,6 @@ class FundingArbitrage:
             candidate = now.replace(hour=h, minute=0, second=0, microsecond=0)
             if candidate > now:
                 return candidate
-        return now.replace(hour=0, minute=0, second=0, microsecond=0).replace(
-            day=now.day + 1
-        )
+        # Next day 00:00 — use timedelta to handle month/year boundaries
+        tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        return tomorrow

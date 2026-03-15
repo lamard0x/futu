@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from src.config import RiskConfig
-from src.strategy import Signal, SignalSource
+from src.strategy import Signal, SignalSource, Regime
 
 logger = logging.getLogger("futu.risk")
 
@@ -88,7 +88,7 @@ class RiskManager:
         rr = reward / risk
         min_rr = (
             self.config.min_rr_trending
-            if signal.source == SignalSource.MAIN
+            if signal.regime == Regime.TRENDING
             else self.config.min_rr_ranging
         )
         return rr >= min_rr, rr

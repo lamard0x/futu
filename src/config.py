@@ -156,6 +156,7 @@ class Config:
         self.exchange.testnet = os.getenv("TESTNET", os.getenv("BYBIT_TESTNET", "true")).lower()
         self.exchange.symbol = os.getenv("TRADING_SYMBOL", "BTC/USDT:USDT")
         self.exchange.leverage = int(os.getenv("TRADING_LEVERAGE", "10"))
+        self.exchange.margin_mode = os.getenv("MARGIN_MODE", "cross").lower()
         self.risk.account_balance = float(os.getenv("ACCOUNT_BALANCE", "300"))
         self.webhook.secret = os.getenv("WEBHOOK_SECRET", "")
         self.funding.enabled = os.getenv("FUNDING_ENABLED", "false").lower() == "true"

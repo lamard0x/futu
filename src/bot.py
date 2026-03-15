@@ -148,9 +148,13 @@ class FutuBot:
             if sym not in self.states:
                 self.states[sym] = SymbolState(symbol=sym)
                 await self.exchange.setup_symbol(sym)
-        # Remove symbols no longer in top
+        # Remove symbols no longer in top (but keep ranging + positions)
+        ranging_set = set(self.config.risk.ranging_symbols)
         for sym in list(self.states.keys()):
-            if sym not in self.symbols and not self.states[sym].has_position:
+            if (sym not in self.symbols
+                    and sym not in ranging_set
+                    and not self.states[sym].has_position
+                    and not self.states[sym].has_trending_position):
                 del self.states[sym]
         self.last_symbol_refresh = datetime.now(timezone.utc)
         logger.info("Active symbols: %s", [s.split("/")[0] for s in self.symbols])
@@ -279,7 +283,8 @@ class FutuBot:
             state = self.states.get(sym)
             if state is None:
                 continue
-            if state.has_position:
+            # Skip if already has ANY position on this symbol
+            if state.has_position or state.has_trending_position:
                 continue
 
             can_trade, reason = self.risk.can_trade_new()
@@ -370,7 +375,8 @@ class FutuBot:
                 await self.exchange.setup_symbol(sym)
                 state = self.states[sym]
 
-            if state.has_trending_position:
+            # Skip if already has ANY position on this symbol
+            if state.has_trending_position or state.has_position:
                 continue
 
             can_trade, reason = self.risk.can_trade()
@@ -523,29 +529,26 @@ class FutuBot:
             self.exchange.config.symbol = orig_symbol
 
     async def _monitor_all_positions(self):
-        for sym, state in self.states.items():
-            if state.has_position:
+        for sym, state in list(self.states.items()):
+            if state.has_position or state.has_trending_position:
                 try:
-                    await self._monitor_position(sym, state, regime="ranging")
+                    await self._monitor_position(sym, state)
                 except Exception as e:
-                    logger.warning("Monitor error %s ranging: %s", sym, e)
-            if state.has_trending_position:
-                try:
-                    await self._monitor_position(sym, state, regime="trending")
-                except Exception as e:
-                    logger.warning("Monitor error %s trending: %s", sym, e)
+                    logger.warning("Monitor error %s: %s", sym, e)
 
-    async def _monitor_position(self, symbol: str, state: SymbolState, regime: str = "ranging"):
+    async def _monitor_position(self, symbol: str, state: SymbolState):
+        """Monitor a single symbol's position. One exchange position per symbol."""
+        regime = "trending" if state.has_trending_position else "ranging"
         orig_symbol = self.exchange.config.symbol
         self.exchange.config.symbol = symbol
         try:
             position = await self.exchange.get_position()
             if position is None:
                 real_pnl = await self.exchange.get_closed_pnl(symbol)
-                if regime == "trending":
-                    state.has_trending_position = False
-                else:
-                    state.has_position = False
+                # Clear both flags — only one exchange position per symbol
+                state.has_position = False
+                state.has_trending_position = False
+                state.partial_closed = False
                 self.risk.on_trade_closed(real_pnl)
                 await self._sync_balance()
                 logger.info("%s %s closed (TP/SL hit) PnL: $%.2f",
@@ -570,10 +573,9 @@ class FutuBot:
                             symbol.split("/")[0], regime, candle_count)
                 await self.exchange.close_position()
                 pnl = position["unrealized_pnl"]
-                if regime == "trending":
-                    state.has_trending_position = False
-                else:
-                    state.has_position = False
+                state.has_position = False
+                state.has_trending_position = False
+                state.partial_closed = False
                 self.risk.on_trade_closed(pnl)
                 await self._sync_balance()
                 if pnl < 0:

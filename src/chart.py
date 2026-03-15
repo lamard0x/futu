@@ -76,12 +76,15 @@ def generate_chart(
                      color=color, edgecolor=color, linewidth=0.5)
 
     # ── EMAs ──
-    if "ema_fast" in df.columns:
-        ax_price.plot(x, df["ema_fast"], color=COLORS["ema9"], linewidth=1, label=f"EMA {indicator_cfg.ema_fast}", alpha=0.9)
-    if "ema_mid" in df.columns:
-        ax_price.plot(x, df["ema_mid"], color=COLORS["ema21"], linewidth=1, label=f"EMA {indicator_cfg.ema_mid}", alpha=0.9)
-    if "ema_slow" in df.columns:
-        ax_price.plot(x, df["ema_slow"], color=COLORS["ema50"], linewidth=1.2, label=f"EMA {indicator_cfg.ema_slow}", alpha=0.9)
+    ema_fast_col = f"ema_{indicator_cfg.ema_fast}"
+    ema_mid_col = f"ema_{indicator_cfg.ema_mid}"
+    ema_slow_col = f"ema_{indicator_cfg.ema_slow}"
+    if ema_fast_col in df.columns:
+        ax_price.plot(x, df[ema_fast_col], color=COLORS["ema9"], linewidth=1, label=f"EMA {indicator_cfg.ema_fast}", alpha=0.9)
+    if ema_mid_col in df.columns:
+        ax_price.plot(x, df[ema_mid_col], color=COLORS["ema21"], linewidth=1, label=f"EMA {indicator_cfg.ema_mid}", alpha=0.9)
+    if ema_slow_col in df.columns:
+        ax_price.plot(x, df[ema_slow_col], color=COLORS["ema50"], linewidth=1.2, label=f"EMA {indicator_cfg.ema_slow}", alpha=0.9)
 
     # ── Bollinger Bands ──
     if "bb_upper" in df.columns:
@@ -97,12 +100,11 @@ def generate_chart(
     if entries:
         for entry in entries:
             ts = entry.get("timestamp")
-            if ts is None:
-                continue
-            mask = df.index == ts
-            if not mask.any():
-                continue
-            idx = mask.values.nonzero()[0][0]
+            idx = len(df) - 1  # default to last candle
+            if ts is not None:
+                mask = df.index == ts
+                if mask.any():
+                    idx = mask.values.nonzero()[0][0]
 
             if entry.get("type") == "entry":
                 color = COLORS["entry_long"] if entry.get("side") == "buy" else COLORS["entry_short"]

@@ -221,41 +221,98 @@ class Exchange:
             logger.warning("Update TP/SL error: %s", e)
 
     async def _update_tp_sl_generic(self, tp_price, sl_price):
-        """Update TP/SL on OKX using algo order amendment."""
+        """Update TP/SL on OKX: cancel existing algo orders, place new ones.
+
+        OKX algo orders (TP/SL) are NOT returned by fetch_open_orders.
+        Must use fetch_open_orders with params={'stop': True} or
+        the private endpoint to get algo orders, then cancel by algoId.
+        New SL is placed via create_order with stopLossPrice param.
+        """
         try:
-            # OKX: fetch existing algo orders (TP/SL), cancel and replace
-            await self.rate_limiter.acquire("fetch_open_orders")
-            open_orders = await self.exchange.fetch_open_orders(self.config.symbol)
-
-            # Cancel existing TP/SL algo orders
-            for order in open_orders:
-                try:
-                    await self.rate_limiter.acquire("cancel_order")
-                    await self.exchange.cancel_order(order["id"], self.config.symbol)
-                except Exception:
-                    pass
-
             position = await self.get_position()
             if position is None:
                 return
             close_side = "sell" if position["side"] == "long" else "buy"
 
-            # Place new SL as conditional stop
+            # Step 1: Cancel existing SL/TP algo orders
+            await self._cancel_algo_orders()
+
+            # Step 2: Place new SL order
             if sl_price is not None:
                 await self.rate_limiter.acquire("create_order")
-                params = {"triggerPrice": str(sl_price)}
-                if self.exchange_name == "okx":
-                    params["tdMode"] = self.config.margin_mode
-                    params["ordType"] = "conditional"
                 await self.exchange.create_order(
-                    symbol=self.config.symbol, type="market",
-                    side=close_side, amount=position["size"],
-                    price=sl_price,
-                    params=params,
+                    symbol=self.config.symbol,
+                    type="market",
+                    side=close_side,
+                    amount=position["size"],
+                    params={
+                        "tdMode": self.config.margin_mode,
+                        "stopLossPrice": sl_price,
+                    },
                 )
-            logger.info("Trailing SL updated: %.2f", sl_price or 0)
+
+            # Step 3: Place new TP order
+            if tp_price is not None:
+                await self.rate_limiter.acquire("create_order")
+                await self.exchange.create_order(
+                    symbol=self.config.symbol,
+                    type="market",
+                    side=close_side,
+                    amount=position["size"],
+                    params={
+                        "tdMode": self.config.margin_mode,
+                        "takeProfitPrice": tp_price,
+                    },
+                )
+
+            logger.info("TP/SL updated: TP=%.2f SL=%.2f", tp_price or 0, sl_price or 0)
         except Exception as e:
             logger.warning("Update TP/SL error: %s", e)
+
+    async def _cancel_algo_orders(self):
+        """Cancel all algo (TP/SL/trigger) orders for current symbol on OKX."""
+        try:
+            # Method 1: Use fetch_open_orders with stop=True to get algo orders
+            await self.rate_limiter.acquire("fetch_open_orders")
+            algo_orders = await self.exchange.fetch_open_orders(
+                self.config.symbol, params={"stop": True}
+            )
+            for order in algo_orders:
+                try:
+                    await self.rate_limiter.acquire("cancel_order")
+                    await self.exchange.cancel_order(
+                        order["id"], self.config.symbol,
+                        params={"stop": True},
+                    )
+                except Exception as e:
+                    logger.debug("Cancel algo order %s: %s", order.get("id"), e)
+        except Exception:
+            pass
+
+        try:
+            # Method 2: Fallback — use OKX private API to cancel all algo orders
+            inst_id = self.config.symbol.replace("/", "-").replace(":USDT", "-SWAP")
+            await self.rate_limiter.acquire("fetch_open_orders")
+            result = await self.exchange.private_get_trade_orders_algo_pending({
+                "instId": inst_id,
+                "ordType": "conditional",
+            })
+            orders = result.get("data", [])
+            for o in orders:
+                algo_id = o.get("algoId")
+                if algo_id:
+                    try:
+                        await self.rate_limiter.acquire("cancel_order")
+                        # OKX cancel-algos expects a list body
+                        await self.exchange.private_post_trade_cancel_algos([{
+                            "algoId": algo_id,
+                            "instId": inst_id,
+                        }])
+                        logger.debug("Cancelled algo order %s", algo_id)
+                    except Exception as e:
+                        logger.debug("Cancel algo %s: %s", algo_id, e)
+        except Exception as e:
+            logger.debug("Fallback algo cancel: %s", e)
 
     async def cancel_all_orders(self):
         try:
@@ -268,6 +325,14 @@ class Exchange:
         position = await self.get_position()
         if position is None:
             return
+        # Cancel any TP/SL algo orders first to avoid orphaned orders
+        if self.exchange_name == "okx":
+            await self._cancel_algo_orders()
+        else:
+            try:
+                await self.cancel_all_orders()
+            except Exception:
+                pass
         close_side = "sell" if position["side"] == "long" else "buy"
         await self.place_market_order(close_side, position["size"])
         logger.info("Position closed")

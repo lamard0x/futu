@@ -114,7 +114,8 @@ class WebhookServer:
             entry_price=price,
             sl_price=sl,
             tp1_price=tp,
-            tp2_price=0.0,
+            tp2_price=None,
+            atr=abs(price - sl),
             reason=f"[TV] {action.upper()} {raw_symbol}",
         )
         return signal, symbol
