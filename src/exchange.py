@@ -190,7 +190,8 @@ class Exchange:
             symbol=self.config.symbol, type="market",
             side=side, amount=amount, params=params,
         )
-        logger.info("Market order: %s %s %.4f", side, self.config.symbol, amount)
+        logger.info("Market order: %s %s %.4f | status=%s id=%s",
+                    side, self.config.symbol, amount, order.get("status"), order.get("id"))
         return OrderResult(
             order_id=order["id"], symbol=order["symbol"],
             side=side, price=float(order.get("average") or order.get("price") or 0),

@@ -330,7 +330,7 @@ class FutuBot:
                 side=side, amount=amount,
                 tp_price=None, sl_price=signal.sl_price,
             )
-            if order.status in ("open", "closed", "filled", "new", "New"):
+            if order.status not in ("canceled", "cancelled", "rejected", "expired"):
                 self.states[symbol].has_trending_position = True
                 self.states[symbol].trending_candle_count = 0
                 self.risk.on_trade_opened()
@@ -391,7 +391,8 @@ class FutuBot:
                 side=side, amount=amount,
                 tp_price=tp_target, sl_price=signal.sl_price,
             )
-            if order.status in ("open", "closed", "filled", "new", "New"):
+            logger.info("Order result: %s status=%s", symbol.split("/")[0], order.status)
+            if order.status not in ("canceled", "cancelled", "rejected", "expired"):
                 self.states[symbol].has_position = True
                 self.states[symbol].position_candle_count = 0
                 self.risk.on_trade_opened()
