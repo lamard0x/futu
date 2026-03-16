@@ -190,36 +190,38 @@ def scan_trending_1h(df_1h: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias) ->
     recent_high = recent["high"].max()
     recent_low = recent["low"].min()
 
-    # BREAKOUT LONG
+    # BREAKOUT LONG — entry at breakout level (retest), not at close
     if (plus_di > minus_di
             and close > recent_high
             and close > opn
             and ema_f > ema_m
             and 50 < rsi < 80
             and bias in (HTFBias.BULLISH, HTFBias.NEUTRAL)):
-        sl = close - cfg.sl_atr * atr
-        tp = close + cfg.sl_atr * 1.5 * atr  # for R:R check only
+        entry = recent_high  # limit buy at breakout level, wait for retest
+        sl = entry - cfg.sl_atr * atr
+        tp = entry + cfg.sl_atr * 1.5 * atr
         return Signal(
             type=SignalType.LONG, source=SignalSource.MAIN,
-            regime=Regime.TRENDING, entry_price=close,
+            regime=Regime.TRENDING, entry_price=entry,
             sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-            reason=f"BRK LONG | ADX {adx:.0f} +DI>{minus_di:.0f} vol {vol/vsma:.1f}x",
+            reason=f"BRK LONG | ADX {adx:.0f} +DI>{minus_di:.0f} vol {vol/vsma:.1f}x retest@{entry:.2f}",
         )
 
-    # BREAKOUT SHORT
+    # BREAKOUT SHORT — entry at breakout level (retest), not at close
     if (minus_di > plus_di
             and close < recent_low
             and close < opn
             and ema_f < ema_m
             and 20 < rsi < 50
             and bias in (HTFBias.BEARISH, HTFBias.NEUTRAL)):
-        sl = close + cfg.sl_atr * atr
-        tp = close - cfg.sl_atr * 1.5 * atr
+        entry = recent_low  # limit sell at breakout level, wait for retest
+        sl = entry + cfg.sl_atr * atr
+        tp = entry - cfg.sl_atr * 1.5 * atr
         return Signal(
             type=SignalType.SHORT, source=SignalSource.MAIN,
-            regime=Regime.TRENDING, entry_price=close,
+            regime=Regime.TRENDING, entry_price=entry,
             sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-            reason=f"BRK SHORT | ADX {adx:.0f} -DI>{plus_di:.0f} vol {vol/vsma:.1f}x",
+            reason=f"BRK SHORT | ADX {adx:.0f} -DI>{plus_di:.0f} vol {vol/vsma:.1f}x retest@{entry:.2f}",
         )
 
     return None
