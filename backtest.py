@@ -415,8 +415,8 @@ async def run_backtest():
                 state.max_drawdown = dd
 
         # ═══ Ranging: 15m detect + 5m confirm ═══
-        # Build 15m signal lookup: {timestamp -> signal_direction}
-        flags_15m = {}  # {bar_time: "long" or "short"}
+        # Build 15m signals with entry params: {timestamp -> signal_dict}
+        flags_15m = {}
         for i in range(IND_CFG.ema_slow + 5, len(df_15m_ind)):
             bar_time = df_15m_ind.index[i]
             if bar_time.replace(tzinfo=timezone.utc) < backtest_start:
@@ -425,10 +425,12 @@ async def run_backtest():
             bias = get_bias(bar_time)
             rsig = scan_ranging(row, bias, STRAT_CFG)
             if rsig:
-                # Flag valid for this 15m bar + next 2 (= 15 min window)
-                flags_15m[bar_time] = rsig["side"]
+                flags_15m[bar_time] = rsig  # includes side, entry, sl, tp
 
-        # Iterate 5m bars — check exits + confirm flagged signals
+        # Track which flags have been used (1 trade per flag)
+        used_flags = set()
+
+        # Iterate 5m bars — exits on 5m, entry only when 15m flagged + 5m confirms
         for i in range(IND_CFG.ema_slow + 5, len(df_5m_ind)):
             bar_time = df_5m_ind.index[i]
             if bar_time.replace(tzinfo=timezone.utc) < backtest_start:
@@ -440,7 +442,7 @@ async def run_backtest():
                 state.daily_loss = 0.0
                 state.daily_date = day_str
 
-            # Exit check on 5m bars (granular)
+            # Exit check on 5m bars
             closed = []
             for t in state.open_ranging:
                 if t.symbol != symbol:
@@ -459,55 +461,48 @@ async def run_backtest():
             if any(t.symbol == symbol for t in state.open_ranging):
                 continue
 
-            # Find active 15m flag for this 5m bar
-            # 15m bar covers 3x 5m bars, so check which 15m bar this falls in
+            # Find active 15m flag (not yet used)
             active_flag = None
-            for flag_time, direction in flags_15m.items():
-                # 5m bar must be within 15 minutes after 15m flag
+            active_flag_time = None
+            for flag_time, sig in flags_15m.items():
+                if flag_time in used_flags:
+                    continue
                 diff = (bar_time - flag_time).total_seconds()
                 if 0 <= diff < 900:  # within 15 min window
-                    active_flag = direction
+                    active_flag = sig
+                    active_flag_time = flag_time
                     break
 
             if active_flag is None:
                 continue
 
-            # 5m confirm: check if 5m agrees with flagged direction
+            # 5m confirm: must agree with 15m direction
             rsi_5m = row.get("rsi") or 50
             close_5m = row["close"]
             bb_mid_5m = row.get("bb_mid") or close_5m
+            confirmed = False
 
-            if active_flag == "long" and (close_5m <= bb_mid_5m or rsi_5m < 45):
-                # 5m confirms long: price below BB mid or RSI low
-                bias = get_bias(bar_time)
-                rsig = scan_ranging(row, bias, STRAT_CFG)
-                if rsig and rsig["side"] == "long":
-                    amt, notional = calc_position_size(
-                        state.balance, rsig["entry"], rsig["sl"],
-                        RISK_CFG.risk_per_trade_main, LEVERAGE)
-                    if amt > 0:
-                        trade = Trade(symbol=symbol, side="long", regime="ranging",
-                                      entry_price=rsig["entry"], sl_price=rsig["sl"],
-                                      tp_price=rsig["tp"], size=amt, notional=notional,
-                                      entry_time=str(bar_time))
-                        state.open_ranging.append(trade)
-                        sym_ranging += 1
+            if active_flag["side"] == "long" and (close_5m <= bb_mid_5m or rsi_5m < 45):
+                confirmed = True
+            elif active_flag["side"] == "short" and (close_5m >= bb_mid_5m or rsi_5m > 55):
+                confirmed = True
 
-            elif active_flag == "short" and (close_5m >= bb_mid_5m or rsi_5m > 55):
-                # 5m confirms short: price above BB mid or RSI high
-                bias = get_bias(bar_time)
-                rsig = scan_ranging(row, bias, STRAT_CFG)
-                if rsig and rsig["side"] == "short":
-                    amt, notional = calc_position_size(
-                        state.balance, rsig["entry"], rsig["sl"],
-                        RISK_CFG.risk_per_trade_main, LEVERAGE)
-                    if amt > 0:
-                        trade = Trade(symbol=symbol, side="short", regime="ranging",
-                                      entry_price=rsig["entry"], sl_price=rsig["sl"],
-                                      tp_price=rsig["tp"], size=amt, notional=notional,
-                                      entry_time=str(bar_time))
-                        state.open_ranging.append(trade)
-                        sym_ranging += 1
+            if not confirmed:
+                continue
+
+            # Use 5m price for entry, 15m signal for SL/TP
+            entry = close_5m
+            sl = active_flag["sl"]
+            tp = active_flag["tp"]
+            amt, notional = calc_position_size(
+                state.balance, entry, sl, RISK_CFG.risk_per_trade_main, LEVERAGE)
+            if amt > 0:
+                trade = Trade(symbol=symbol, side=active_flag["side"], regime="ranging",
+                              entry_price=entry, sl_price=sl, tp_price=tp,
+                              size=amt, notional=notional, entry_time=str(bar_time))
+                state.open_ranging.append(trade)
+                sym_ranging += 1
+                used_flags.add(active_flag_time)  # mark flag as used
 
         # ═══ Trending on 1H (top volume symbols only) ═══
         if symbol not in TRENDING_SYMBOLS:

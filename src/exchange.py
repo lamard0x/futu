@@ -240,51 +240,48 @@ class Exchange:
             logger.warning("Update TP/SL error: %s", e)
 
     async def _update_tp_sl_generic(self, tp_price, sl_price):
-        """Update TP/SL on OKX: cancel existing algo orders, place new ones.
-
-        OKX algo orders (TP/SL) are NOT returned by fetch_open_orders.
-        Must use fetch_open_orders with params={'stop': True} or
-        the private endpoint to get algo orders, then cancel by algoId.
-        New SL is placed via create_order with stopLossPrice param.
-        """
+        """Update TP/SL on OKX using algo order API (conditional orders)."""
         try:
             position = await self.get_position()
             if position is None:
                 return
-            close_side = "sell" if position["side"] == "long" else "buy"
 
-            # Step 1: Cancel existing SL/TP algo orders
+            inst_id = self.config.symbol.replace("/", "-").replace(":USDT", "-SWAP")
+            close_side = "sell" if position["side"] == "long" else "buy"
+            size = str(int(position["size"]))
+
+            # Cancel existing algo orders first
             await self._cancel_algo_orders()
 
-            # Step 2: Place new SL order
+            # Place SL as conditional algo order
             if sl_price is not None:
                 await self.rate_limiter.acquire("create_order")
-                await self.exchange.create_order(
-                    symbol=self.config.symbol,
-                    type="market",
-                    side=close_side,
-                    amount=position["size"],
-                    params={
-                        "tdMode": self.config.margin_mode,
-                        "stopLossPrice": sl_price,
-                    },
-                )
+                await self.exchange.private_post_trade_order_algo({
+                    "instId": inst_id,
+                    "tdMode": self.config.margin_mode,
+                    "side": close_side,
+                    "ordType": "conditional",
+                    "sz": size,
+                    "slTriggerPx": str(sl_price),
+                    "slOrdPx": "-1",  # market price
+                    "reduceOnly": "true",
+                })
 
-            # Step 3: Place new TP order
+            # Place TP as conditional algo order
             if tp_price is not None:
                 await self.rate_limiter.acquire("create_order")
-                await self.exchange.create_order(
-                    symbol=self.config.symbol,
-                    type="market",
-                    side=close_side,
-                    amount=position["size"],
-                    params={
-                        "tdMode": self.config.margin_mode,
-                        "takeProfitPrice": tp_price,
-                    },
-                )
+                await self.exchange.private_post_trade_order_algo({
+                    "instId": inst_id,
+                    "tdMode": self.config.margin_mode,
+                    "side": close_side,
+                    "ordType": "conditional",
+                    "sz": size,
+                    "tpTriggerPx": str(tp_price),
+                    "tpOrdPx": "-1",  # market price
+                    "reduceOnly": "true",
+                })
 
-            logger.info("TP/SL updated: TP=%.2f SL=%.2f", tp_price or 0, sl_price or 0)
+            logger.info("TP/SL set: TP=%s SL=%s", tp_price or "-", sl_price or "-")
         except Exception as e:
             logger.warning("Update TP/SL error: %s", e)
 
