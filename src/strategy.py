@@ -230,12 +230,14 @@ def scan_trending_1h(df_1h: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias) ->
 # ── TRENDING PULLBACK (EMA bounce in trend) ──────────────────────
 
 def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias) -> Signal | None:
-    """Pullback to EMA in a strong trend — higher frequency than breakout."""
+    """Two-layer pullback entry:
+    Layer 1: EMA21 touch + 40% wick rejection → entry at EMA21
+    Layer 2: If EMA21 no wick → wait for EMA50 touch + any wick → entry at EMA50
+    """
     if len(df) < 30:
         return None
 
     row = df.iloc[-1]
-    prev = df.iloc[-2]
 
     close = row["close"]
     opn = row["open"]
@@ -248,45 +250,84 @@ def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias)
     minus_di = row.get("minus_di") or 0
     ema_f = row.get("ema_9") or 0
     ema_m = row.get("ema_21") or 0
+    ema_s = row.get("ema_50") or 0
 
     if atr <= 0 or adx < cfg.adx_min:
         return None
 
-    # PULLBACK LONG: price touched EMA21 zone then bounced (deeper entry)
+    candle_range = high - low
+    if candle_range <= 0:
+        return None
+
+    # ── LONG ──
     if (bias in (HTFBias.BULLISH, HTFBias.NEUTRAL)
             and plus_di > minus_di
             and ema_f > ema_m
-            and close > opn                          # bullish candle
-            and low <= ema_m * 1.002                 # wick touched near EMA21
-            and close > ema_m                        # closed above EMA21
-            and 40 < rsi < 70):                      # not overbought
-        entry = ema_m                                # limit buy at EMA21
-        sl = ema_m - 1.5 * atr
-        tp = entry + 2.0 * (entry - sl)
-        return Signal(
-            type=SignalType.LONG, source=SignalSource.MAIN,
-            regime=Regime.TRENDING, entry_price=entry,
-            sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-            reason=f"PB LONG | ADX {adx:.0f} EMA21 bounce RSI {rsi:.0f}",
-        )
+            and close > opn
+            and 40 < rsi < 70):
 
-    # PULLBACK SHORT: price touched EMA21 zone then rejected
+        # Wick ratio for long: lower wick / total range
+        lower_wick = min(close, opn) - low
+        wick_pct = lower_wick / candle_range
+
+        # Layer 1: EMA21 touch + 40% wick rejection
+        if low <= ema_m * 1.002 and close > ema_m and wick_pct >= 0.4:
+            entry = ema_m
+            sl = ema_m - 1.5 * atr
+            tp = entry + 2.0 * (entry - sl)
+            return Signal(
+                type=SignalType.LONG, source=SignalSource.MAIN,
+                regime=Regime.TRENDING, entry_price=entry,
+                sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
+                reason=f"PB LONG | EMA21 wick {wick_pct:.0%} ADX {adx:.0f}",
+            )
+
+        # Layer 2: EMA50 touch + any wick bounce
+        if ema_s > 0 and low <= ema_s * 1.002 and close > ema_s:
+            entry = ema_s
+            sl = ema_s - 1.5 * atr
+            tp = entry + 2.0 * (entry - sl)
+            return Signal(
+                type=SignalType.LONG, source=SignalSource.MAIN,
+                regime=Regime.TRENDING, entry_price=entry,
+                sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
+                reason=f"PB LONG | EMA50 deep bounce ADX {adx:.0f}",
+            )
+
+    # ── SHORT ──
     if (bias in (HTFBias.BEARISH, HTFBias.NEUTRAL)
             and minus_di > plus_di
             and ema_f < ema_m
-            and close < opn                          # bearish candle
-            and high >= ema_m * 0.998                # wick touched near EMA21
-            and close < ema_m                        # closed below EMA21
-            and 30 < rsi < 60):                      # not oversold
-        entry = ema_m                                # limit sell at EMA21
-        sl = ema_m + 1.5 * atr
-        tp = entry - 2.0 * (sl - entry)
-        return Signal(
-            type=SignalType.SHORT, source=SignalSource.MAIN,
-            regime=Regime.TRENDING, entry_price=entry,
-            sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-            reason=f"PB SHORT | ADX {adx:.0f} EMA21 bounce RSI {rsi:.0f}",
-        )
+            and close < opn
+            and 30 < rsi < 60):
+
+        # Wick ratio for short: upper wick / total range
+        upper_wick = high - max(close, opn)
+        wick_pct = upper_wick / candle_range
+
+        # Layer 1: EMA21 touch + 40% wick rejection
+        if high >= ema_m * 0.998 and close < ema_m and wick_pct >= 0.4:
+            entry = ema_m
+            sl = ema_m + 1.5 * atr
+            tp = entry - 2.0 * (sl - entry)
+            return Signal(
+                type=SignalType.SHORT, source=SignalSource.MAIN,
+                regime=Regime.TRENDING, entry_price=entry,
+                sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
+                reason=f"PB SHORT | EMA21 wick {wick_pct:.0%} ADX {adx:.0f}",
+            )
+
+        # Layer 2: EMA50 touch + any wick bounce
+        if ema_s > 0 and high >= ema_s * 0.998 and close < ema_s:
+            entry = ema_s
+            sl = ema_s + 1.5 * atr
+            tp = entry - 2.0 * (sl - entry)
+            return Signal(
+                type=SignalType.SHORT, source=SignalSource.MAIN,
+                regime=Regime.TRENDING, entry_price=entry,
+                sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
+                reason=f"PB SHORT | EMA50 deep bounce ADX {adx:.0f}",
+            )
 
     return None
 
