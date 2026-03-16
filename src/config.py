@@ -88,7 +88,7 @@ class RiskConfig:
     max_symbols: int = 15
     cooldown_candles: int = 0
     min_rr_trending: float = 1.3
-    min_rr_ranging: float = 1.2
+    min_rr_ranging: float = 1.0
 
 
 @dataclass
