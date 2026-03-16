@@ -46,6 +46,7 @@ class SymbolState:
     limit_order_id: str | None = None     # pending limit order
     limit_order_ticks: int = 0            # ticks since limit placed
     limit_order_signal: Signal | None = None  # signal that triggered limit
+    tp_price: float = 0.0                 # saved TP for trailing re-set
 
 
 class FutuBot:
@@ -592,6 +593,7 @@ class FutuBot:
                 self.states[symbol].has_position = True
                 self.states[symbol].position_candle_count = 0
                 self.states[symbol].partial_closed = False
+                self.states[symbol].tp_price = tp_target
                 self.risk.on_trade_opened()
                 # Set TP/SL
                 await asyncio.sleep(0.5)
@@ -649,6 +651,7 @@ class FutuBot:
                         tp = signal.tp1_price
                         if signal.tp2_price and signal.regime == Regime.TRENDING:
                             tp = signal.tp2_price
+                        state.tp_price = tp
                         await self.exchange.update_tp_sl(tp_price=tp, sl_price=signal.sl_price)
                     state.limit_order_id = None
                     state.limit_order_signal = None
@@ -774,8 +777,11 @@ class FutuBot:
                         "%s %s trailing SL: %g → %g (pnl: %.2f%%)",
                         symbol.split("/")[0], regime, entry, new_sl, pnl_pct * 100,
                     )
-                    # Only update SL, keep existing TP
-                    await self.exchange.update_tp_sl(sl_price=new_sl)
+                    # Update SL + re-set TP (cancel_algo removes both)
+                    await self.exchange.update_tp_sl(
+                        sl_price=new_sl,
+                        tp_price=state.tp_price if state.tp_price > 0 else None,
+                    )
         finally:
             self.exchange.config.symbol = orig_symbol
 
