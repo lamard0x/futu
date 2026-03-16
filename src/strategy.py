@@ -252,38 +252,40 @@ def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias)
     if atr <= 0 or adx < cfg.adx_min:
         return None
 
-    # PULLBACK LONG: price touched EMA9/21 zone then bounced
+    # PULLBACK LONG: price touched EMA21 zone then bounced (deeper entry)
     if (bias in (HTFBias.BULLISH, HTFBias.NEUTRAL)
             and plus_di > minus_di
             and ema_f > ema_m
             and close > opn                          # bullish candle
-            and low <= ema_f * 1.002                 # wick touched near EMA9
-            and close > ema_f                        # closed above EMA9
+            and low <= ema_m * 1.002                 # wick touched near EMA21
+            and close > ema_m                        # closed above EMA21
             and 40 < rsi < 70):                      # not overbought
-        sl = ema_m - 1.0 * atr
-        tp = close + 1.5 * (close - sl)
+        entry = ema_m                                # limit buy at EMA21
+        sl = ema_m - 1.5 * atr
+        tp = entry + 2.0 * (entry - sl)
         return Signal(
             type=SignalType.LONG, source=SignalSource.MAIN,
-            regime=Regime.TRENDING, entry_price=close,
+            regime=Regime.TRENDING, entry_price=entry,
             sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-            reason=f"PB LONG | ADX {adx:.0f} EMA bounce RSI {rsi:.0f}",
+            reason=f"PB LONG | ADX {adx:.0f} EMA21 bounce RSI {rsi:.0f}",
         )
 
-    # PULLBACK SHORT: price touched EMA9/21 zone then rejected
+    # PULLBACK SHORT: price touched EMA21 zone then rejected
     if (bias in (HTFBias.BEARISH, HTFBias.NEUTRAL)
             and minus_di > plus_di
             and ema_f < ema_m
             and close < opn                          # bearish candle
-            and high >= ema_f * 0.998                # wick touched near EMA9
-            and close < ema_f                        # closed below EMA9
+            and high >= ema_m * 0.998                # wick touched near EMA21
+            and close < ema_m                        # closed below EMA21
             and 30 < rsi < 60):                      # not oversold
-        sl = ema_m + 1.0 * atr
-        tp = close - 1.5 * (sl - close)
+        entry = ema_m                                # limit sell at EMA21
+        sl = ema_m + 1.5 * atr
+        tp = entry - 2.0 * (sl - entry)
         return Signal(
             type=SignalType.SHORT, source=SignalSource.MAIN,
-            regime=Regime.TRENDING, entry_price=close,
+            regime=Regime.TRENDING, entry_price=entry,
             sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-            reason=f"PB SHORT | ADX {adx:.0f} EMA bounce RSI {rsi:.0f}",
+            reason=f"PB SHORT | ADX {adx:.0f} EMA21 bounce RSI {rsi:.0f}",
         )
 
     return None
