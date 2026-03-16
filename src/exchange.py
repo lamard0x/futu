@@ -292,28 +292,12 @@ class Exchange:
             logger.warning("Update TP/SL error: %s", e)
 
     async def _cancel_algo_orders(self):
-        """Cancel all algo (TP/SL/trigger) orders for current symbol on OKX."""
-        try:
-            # Method 1: Use fetch_open_orders with stop=True to get algo orders
-            await self.rate_limiter.acquire("fetch_open_orders")
-            algo_orders = await self.exchange.fetch_open_orders(
-                self.config.symbol, params={"stop": True}
-            )
-            for order in algo_orders:
-                try:
-                    await self.rate_limiter.acquire("cancel_order")
-                    await self.exchange.cancel_order(
-                        order["id"], self.config.symbol,
-                        params={"stop": True},
-                    )
-                except Exception as e:
-                    logger.debug("Cancel algo order %s: %s", order.get("id"), e)
-        except Exception:
-            pass
+        """Cancel ALL algo (TP/SL/trigger) orders for current symbol on OKX."""
+        inst_id = self.config.symbol.replace("/", "-").replace(":USDT", "-SWAP")
+        cancelled = 0
 
+        # Get all pending algo orders for this symbol
         try:
-            # Method 2: Fallback — use OKX private API to cancel all algo orders
-            inst_id = self.config.symbol.replace("/", "-").replace(":USDT", "-SWAP")
             await self.rate_limiter.acquire("fetch_open_orders")
             result = await self.exchange.private_get_trade_orders_algo_pending({
                 "instId": inst_id,
@@ -325,16 +309,18 @@ class Exchange:
                 if algo_id:
                     try:
                         await self.rate_limiter.acquire("cancel_order")
-                        # OKX cancel-algos expects a list body
                         await self.exchange.private_post_trade_cancel_algos([{
                             "algoId": algo_id,
                             "instId": inst_id,
                         }])
-                        logger.debug("Cancelled algo order %s", algo_id)
+                        cancelled += 1
                     except Exception as e:
-                        logger.debug("Cancel algo %s: %s", algo_id, e)
+                        logger.warning("Cancel algo %s failed: %s", algo_id, e)
         except Exception as e:
-            logger.debug("Fallback algo cancel: %s", e)
+            logger.warning("Fetch algo orders failed: %s", e)
+
+        if cancelled > 0:
+            logger.info("Cancelled %d algo orders for %s", cancelled, self.config.symbol.split("/")[0])
 
     async def cancel_all_orders(self):
         try:

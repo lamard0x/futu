@@ -516,6 +516,9 @@ class FutuBot:
         orig_symbol = self.exchange.config.symbol
         self.exchange.config.symbol = symbol
         try:
+            # Cancel stale algo orders before new entry
+            await self.exchange._cancel_algo_orders()
+
             order = await self.exchange.place_limit_order(
                 side=side, amount=amount, price=limit_price,
             )
@@ -585,6 +588,9 @@ class FutuBot:
         orig_symbol = self.exchange.config.symbol
         self.exchange.config.symbol = symbol
         try:
+            # Cancel stale algo orders before new entry
+            await self.exchange._cancel_algo_orders()
+
             order = await self.exchange.place_limit_order(
                 side=side, amount=amount, price=limit_price,
             )
