@@ -532,7 +532,7 @@ class FutuBot:
                 state.limit_order_ticks = 0
                 state.limit_order_signal = signal
                 state.has_position = True  # block new signals for this symbol
-                logger.info("Limit order pending: %s %s — will cancel after 6 bars", symbol.split("/")[0], order.order_id)
+                logger.info("Limit order pending: %s %s — will cancel after 15 min", symbol.split("/")[0], order.order_id)
                 try:
                     candles = await self.exchange.fetch_candles(
                         self.config.timeframe.main_tf, 100, symbol=symbol,
@@ -593,14 +593,14 @@ class FutuBot:
                             sym, side, signal.entry_price, signal.sl_price,
                             tp, position["size"], rr, signal.regime.value, None,
                         )
-                elif state.limit_order_ticks >= 6:
-                    # 6 ticks (3 min) — cancel
+                elif state.limit_order_ticks >= 30:
+                    # 30 ticks (15 min) — cancel
                     try:
                         await self.exchange.exchange.cancel_order(
                             state.limit_order_id, sym)
                     except Exception:
                         pass
-                    logger.info("Limit cancelled: %s — not filled after 6 ticks",
+                    logger.info("Limit cancelled: %s — not filled after 15 min",
                                 sym.split("/")[0])
                     state.limit_order_id = None
                     state.limit_order_signal = None
