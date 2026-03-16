@@ -140,7 +140,11 @@ class CommandListener:
                 cmd = parts[0].replace("/", "").replace("@", " ").split()[0]
                 args = parts[1:] if len(parts) > 1 else []
                 logger.info("Command received: /%s", cmd)
-                await self._handle_command(cmd, args)
+                try:
+                    await self._handle_command(cmd, args)
+                except Exception as e:
+                    logger.warning("Command /%s error: %s", cmd, e)
+                    await send_message(f"Error: {e}")
 
     async def _handle_command(self, cmd: str, args: list[str] = None):
         if cmd == "chart":
