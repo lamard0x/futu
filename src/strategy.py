@@ -77,13 +77,18 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias) -> 
 
     row = df.iloc[-1]
     close = row["close"]
+    ema_mid = row.get("ema_21") or 0
+
+    # Don't long if price below EMA21 (downtrend)
+    if close < ema_mid and ema_mid > 0:
+        return None
+
     rsi = row["rsi"]
     bb_lower = row["bb_lower"]
     bb_mid = row["bb_mid"]
     volume = row["volume"]
     vol_sma = row["volume_sma"]
     atr = row["atr"]
-    bullish_candle = close > row["open"]
 
     touch_lower = close <= bb_lower * (1 + cfg.bb_touch_pct / 100)
     rsi_oversold = rsi < cfg.rsi_oversold
@@ -115,6 +120,11 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias) ->
 
     row = df.iloc[-1]
     close = row["close"]
+    ema_mid = row.get("ema_21") or row.get(f"ema_{cfg.adx_trending}", 0)
+
+    # Don't short if price above EMA21 (uptrend)
+    if close > ema_mid and ema_mid > 0:
+        return None
     rsi = row["rsi"]
     bb_upper = row["bb_upper"]
     bb_mid = row["bb_mid"]

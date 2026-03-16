@@ -412,8 +412,9 @@ class FutuBot:
             logger.info("Trending scan: %d signals found", signals_found)
 
     async def _execute_trending(self, signal: Signal, symbol: str):
-        """Execute trending trade with TP1 + trailing SL."""
+        """Execute trending trade with TP1 + trailing SL. Half size of ranging."""
         amount = self.risk.calc_position_size(signal, leverage=self.config.exchange.leverage)
+        amount = amount * 0.5  # trending = 50% size of ranging
         if amount <= 0:
             logger.warning("Trending position size too small for %s", symbol)
             return

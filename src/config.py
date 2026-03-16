@@ -117,7 +117,7 @@ class TrendingConfig:
     lookback: int = 20
     body_pct: float = 0.5
     sl_atr: float = 2.5
-    max_hold_bars: int = 48  # 48h on 1H
+    max_hold_bars: int = 0  # disabled — let TP/SL handle exit
     # Only trade top volume symbols for trending
     use_top_volume: bool = True  # auto top 20 volume for trending
     symbols: list = field(default_factory=list)  # empty = use top volume
