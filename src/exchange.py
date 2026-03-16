@@ -147,28 +147,34 @@ class Exchange:
         self, side: str, amount: float, price: float,
         tp_price: Optional[float] = None, sl_price: Optional[float] = None,
     ) -> OrderResult:
-        params = {"timeInForce": "PostOnly"}
+        params = {}
         if self.exchange_name == "okx":
             params["tdMode"] = self.config.margin_mode
-        if tp_price is not None:
-            params["takeProfit"] = {"triggerPrice": tp_price}
-        if sl_price is not None:
-            params["stopLoss"] = {"triggerPrice": sl_price}
+
+        # Convert coin amount to contracts for OKX
+        order_amount = amount
+        if self.exchange_name == "okx" and self.config.symbol in self.exchange.markets:
+            market = self.exchange.markets[self.config.symbol]
+            ct_val = float(market.get("contractSize") or market.get("info", {}).get("ctVal") or 1)
+            if ct_val > 0 and ct_val != 1:
+                order_amount = int(amount / ct_val)
+            else:
+                order_amount = int(amount)
+            if order_amount <= 0:
+                order_amount = 1
 
         await self.rate_limiter.acquire("create_order")
         order = await retry_api_call(
             self.exchange.create_order,
             symbol=self.config.symbol, type="limit",
-            side=side, amount=amount, price=price, params=params,
+            side=side, amount=order_amount, price=price, params=params,
         )
-        logger.info(
-            "Order placed: %s %s %.4f @ %.2f | TP=%.2f SL=%.2f",
-            side, self.config.symbol, amount, price,
-            tp_price or 0, sl_price or 0,
-        )
+        logger.info("Limit order: %s %s %s @ %g | status=%s id=%s",
+                    side, self.config.symbol, order_amount, price,
+                    order.get("status"), order.get("id"))
         return OrderResult(
             order_id=order["id"], symbol=order["symbol"],
-            side=side, price=price, amount=amount,
+            side=side, price=price, amount=order_amount,
             status=order["status"], raw=order,
         )
 

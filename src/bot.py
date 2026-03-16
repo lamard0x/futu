@@ -42,6 +42,9 @@ class SymbolState:
     pending_signal: Signal | None = None  # 15m signal waiting for 5m confirm
     pending_ticks: int = 0                # how many ticks waiting for confirm
     partial_closed: bool = False          # TP1 hit, 50% closed, trailing rest
+    limit_order_id: str | None = None     # pending limit order
+    limit_order_ticks: int = 0            # ticks since limit placed
+    limit_order_signal: Signal | None = None  # signal that triggered limit
 
 
 class FutuBot:
@@ -181,6 +184,9 @@ class FutuBot:
         if self._should_htf_scan(now):
             await self._update_all_htf_bias()
             self.last_htf_scan = now
+
+        # Monitor pending limit orders
+        await self._monitor_limit_orders()
 
         # Monitor existing positions
         await self._monitor_all_positions()
@@ -414,7 +420,7 @@ class FutuBot:
             logger.info("Trending scan: %d signals found", signals_found)
 
     async def _execute_trending(self, signal: Signal, symbol: str):
-        """Execute trending trade with TP1 + trailing SL. Half size of ranging."""
+        """Execute trending trade — limit order at breakout level (retest entry). Half size."""
         amount = self.risk.calc_position_size(signal, leverage=self.config.exchange.leverage)
         amount = amount * 0.5  # trending = 50% size of ranging
         if amount <= 0:
@@ -423,31 +429,36 @@ class FutuBot:
 
         side = "buy" if signal.type == SignalType.LONG else "sell"
         tp_target = signal.tp1_price
+        limit_price = signal.entry_price  # breakout level — wait for retest
 
         logger.info(
-            "TRENDING EXEC %s: %s %.6f @ %g | SL: %g | TP: %g",
-            symbol.split("/")[0], side, amount, signal.entry_price,
+            "TRENDING LIMIT %s: %s %.6f @ %g | SL: %g | TP: %g",
+            symbol.split("/")[0], side, amount, limit_price,
             signal.sl_price, tp_target,
         )
 
         orig_symbol = self.exchange.config.symbol
         self.exchange.config.symbol = symbol
         try:
-            order = await self.exchange.place_market_order(
-                side=side, amount=amount,
-                tp_price=tp_target, sl_price=signal.sl_price,
+            order = await self.exchange.place_limit_order(
+                side=side, amount=amount, price=limit_price,
             )
-            if order.status not in ("canceled", "cancelled", "rejected", "expired"):
+            if order.status in ("closed", "filled"):
                 self.states[symbol].has_trending_position = True
                 self.states[symbol].trending_candle_count = 0
                 self.states[symbol].partial_closed = False
                 self.risk.on_trade_opened()
-                logger.info("Trending trade opened: %s %s", symbol.split("/")[0], order.order_id)
-                rr = abs(signal.tp1_price - signal.entry_price) / abs(signal.entry_price - signal.sl_price) if signal.sl_price != signal.entry_price else 0
-                await telegram.notify_signal(
-                    symbol, side, signal.entry_price, signal.sl_price,
-                    signal.tp1_price, amount, rr, "trending", None,
-                )
+                await asyncio.sleep(0.5)
+                await self.exchange.update_tp_sl(tp_price=tp_target, sl_price=signal.sl_price)
+                logger.info("Trending filled immediately: %s", symbol.split("/")[0])
+            elif order.status not in ("canceled", "cancelled", "rejected", "expired"):
+                # Pending limit — track it
+                state = self.states[symbol]
+                state.limit_order_id = order.order_id
+                state.limit_order_ticks = 0
+                state.limit_order_signal = signal
+                state.has_trending_position = True
+                logger.info("Trending limit pending: %s — retest entry", symbol.split("/")[0])
         finally:
             self.exchange.config.symbol = orig_symbol
 
@@ -485,27 +496,43 @@ class FutuBot:
 
         rr = abs(tp_target - signal.entry_price) / abs(signal.entry_price - signal.sl_price) if signal.sl_price != signal.entry_price else 0
 
+        # Ranging: limit order at BB band for better entry
+        # Trending: limit order at breakout level (retest entry)
+        limit_price = signal.entry_price  # BB lower/upper for ranging, breakout level for trending
+
         logger.info(
-            "EXEC %s: %s %.6f @ %g | SL: %g | TP: %g",
-            symbol.split("/")[0], side, amount, signal.entry_price,
+            "LIMIT %s: %s %.6f @ %g | SL: %g | TP: %g",
+            symbol.split("/")[0], side, amount, limit_price,
             signal.sl_price, tp_target,
         )
 
-        # Temporarily set symbol for order
         orig_symbol = self.exchange.config.symbol
         self.exchange.config.symbol = symbol
         try:
-            order = await self.exchange.place_market_order(
-                side=side, amount=amount,
-                tp_price=tp_target, sl_price=signal.sl_price,
+            order = await self.exchange.place_limit_order(
+                side=side, amount=amount, price=limit_price,
             )
-            logger.info("Order result: %s status=%s", symbol.split("/")[0], order.status)
-            if order.status not in ("canceled", "cancelled", "rejected", "expired"):
+            logger.info("Limit order: %s status=%s id=%s", symbol.split("/")[0], order.status, order.order_id)
+            if order.status in ("canceled", "cancelled", "rejected", "expired"):
+                logger.warning("Limit order rejected: %s", symbol.split("/")[0])
+            elif order.status in ("closed", "filled"):
+                # Filled immediately
                 self.states[symbol].has_position = True
                 self.states[symbol].position_candle_count = 0
                 self.states[symbol].partial_closed = False
                 self.risk.on_trade_opened()
-                logger.info("Trade opened: %s %s", symbol.split("/")[0], order.order_id)
+                # Set TP/SL
+                await asyncio.sleep(0.5)
+                await self.exchange.update_tp_sl(tp_price=tp_target, sl_price=signal.sl_price)
+                logger.info("Trade opened (filled): %s %s", symbol.split("/")[0], order.order_id)
+            else:
+                # Pending — track limit order for monitoring
+                state = self.states[symbol]
+                state.limit_order_id = order.order_id
+                state.limit_order_ticks = 0
+                state.limit_order_signal = signal
+                state.has_position = True  # block new signals for this symbol
+                logger.info("Limit order pending: %s %s — will cancel after 6 bars", symbol.split("/")[0], order.order_id)
                 try:
                     candles = await self.exchange.fetch_candles(
                         self.config.timeframe.main_tf, 100, symbol=symbol,
@@ -530,6 +557,60 @@ class FutuBot:
                 )
         finally:
             self.exchange.config.symbol = orig_symbol
+
+    async def _monitor_limit_orders(self):
+        """Check pending limit orders — fill → set TP/SL, or cancel after 6 ticks."""
+        for sym, state in list(self.states.items()):
+            if not state.limit_order_id:
+                continue
+            state.limit_order_ticks += 1
+
+            orig_symbol = self.exchange.config.symbol
+            self.exchange.config.symbol = sym
+            try:
+                # Check if filled
+                position = await self.exchange.get_position()
+                if position is not None:
+                    # Filled — set TP/SL
+                    signal = state.limit_order_signal
+                    if signal:
+                        tp = signal.tp1_price
+                        if signal.tp2_price and signal.regime == Regime.TRENDING:
+                            tp = signal.tp2_price
+                        await self.exchange.update_tp_sl(tp_price=tp, sl_price=signal.sl_price)
+                    state.limit_order_id = None
+                    state.limit_order_signal = None
+                    state.limit_order_ticks = 0
+                    state.position_candle_count = 0
+                    state.partial_closed = False
+                    self.risk.on_trade_opened()
+                    logger.info("Limit filled: %s — TP/SL set", sym.split("/")[0])
+                    if signal:
+                        side = "buy" if signal.type == SignalType.LONG else "sell"
+                        tp = signal.tp1_price
+                        rr = abs(tp - signal.entry_price) / abs(signal.entry_price - signal.sl_price) if signal.sl_price != signal.entry_price else 0
+                        await telegram.notify_signal(
+                            sym, side, signal.entry_price, signal.sl_price,
+                            tp, position["size"], rr, signal.regime.value, None,
+                        )
+                elif state.limit_order_ticks >= 6:
+                    # 6 ticks (3 min) — cancel
+                    try:
+                        await self.exchange.exchange.cancel_order(
+                            state.limit_order_id, sym)
+                    except Exception:
+                        pass
+                    logger.info("Limit cancelled: %s — not filled after 6 ticks",
+                                sym.split("/")[0])
+                    state.limit_order_id = None
+                    state.limit_order_signal = None
+                    state.limit_order_ticks = 0
+                    state.has_position = False
+                    state.has_trending_position = False
+            except Exception as e:
+                logger.warning("Monitor limit error %s: %s", sym, e)
+            finally:
+                self.exchange.config.symbol = orig_symbol
 
     async def _monitor_all_positions(self):
         for sym, state in list(self.states.items()):
