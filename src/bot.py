@@ -614,6 +614,9 @@ class FutuBot:
 
     async def _monitor_all_positions(self):
         for sym, state in list(self.states.items()):
+            # Skip if pending limit order (handled by _monitor_limit_orders)
+            if state.limit_order_id:
+                continue
             if state.has_position or state.has_trending_position:
                 try:
                     await self._monitor_position(sym, state)
@@ -675,6 +678,7 @@ class FutuBot:
             notional = entry * position["size"] if position["size"] > 0 else 1
             pnl_pct = position["unrealized_pnl"] / notional
 
+            logger.info("%s pnl=%.2f%% (need >0.3%% for trailing)", symbol.split("/")[0], pnl_pct * 100)
             if pnl_pct > 0.003:
                 tf = self.config.timeframe.trending_tf if regime == "trending" else self.config.timeframe.main_tf
                 candles = await self.exchange.fetch_candles(tf, 30, symbol=symbol)
@@ -684,6 +688,8 @@ class FutuBot:
 
                 if position["side"] == "long":
                     chandelier = row["chandelier_long"]
+                    logger.info("%s chandelier=%.2f entry=%.2f (need chand > entry)",
+                                symbol.split("/")[0], chandelier, entry)
                     if chandelier > entry:
                         new_sl = chandelier
                 elif position["side"] == "short":
