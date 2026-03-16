@@ -118,6 +118,7 @@ class FutuBot:
                 if sym not in self.states:
                     self.states[sym] = SymbolState(symbol=sym)
                 self.states[sym].has_position = True
+                self.states[sym].limit_order_id = None  # clear any stale limit state
                 synced += 1
                 logger.info("Synced position: %s %s %.4f @ %.2f",
                             sym.split("/")[0], p.get("side", "?"),
