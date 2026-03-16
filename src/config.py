@@ -113,8 +113,8 @@ class TrendingConfig:
     """Breakout trending on 1H — separate from ranging."""
     enabled: bool = True
     adx_min: float = 35.0
-    vol_mult: float = 1.5
-    lookback: int = 20
+    vol_mult: float = 1.2
+    lookback: int = 10
     body_pct: float = 0.5
     sl_atr: float = 2.0
     max_hold_bars: int = 0  # disabled — let TP/SL handle exit
@@ -129,6 +129,7 @@ class TimeframeConfig:
     main_tf: str = "15m"
     confirm_tf: str = "5m"
     trending_tf: str = "1h"
+    trending_tf_fast: str = "30m"
     alert_tf: str = "1m"
     candle_limit: int = 200
 

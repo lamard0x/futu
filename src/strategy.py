@@ -225,6 +225,68 @@ def scan_trending_1h(df_1h: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias) ->
     return None
 
 
+# ── TRENDING PULLBACK (EMA bounce in trend) ──────────────────────
+
+def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias) -> Signal | None:
+    """Pullback to EMA in a strong trend — higher frequency than breakout."""
+    if len(df) < 30:
+        return None
+
+    row = df.iloc[-1]
+    prev = df.iloc[-2]
+
+    close = row["close"]
+    opn = row["open"]
+    low = row["low"]
+    high = row["high"]
+    adx = row.get("adx") or 0
+    atr = row.get("atr") or 0
+    rsi = row.get("rsi") or 0
+    plus_di = row.get("plus_di") or 0
+    minus_di = row.get("minus_di") or 0
+    ema_f = row.get("ema_9") or 0
+    ema_m = row.get("ema_21") or 0
+
+    if atr <= 0 or adx < cfg.adx_min:
+        return None
+
+    # PULLBACK LONG: price touched EMA9/21 zone then bounced
+    if (bias in (HTFBias.BULLISH, HTFBias.NEUTRAL)
+            and plus_di > minus_di
+            and ema_f > ema_m
+            and close > opn                          # bullish candle
+            and low <= ema_f * 1.002                 # wick touched near EMA9
+            and close > ema_f                        # closed above EMA9
+            and 40 < rsi < 70):                      # not overbought
+        sl = ema_m - 1.0 * atr
+        tp = close + 1.5 * (close - sl)
+        return Signal(
+            type=SignalType.LONG, source=SignalSource.MAIN,
+            regime=Regime.TRENDING, entry_price=close,
+            sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
+            reason=f"PB LONG | ADX {adx:.0f} EMA bounce RSI {rsi:.0f}",
+        )
+
+    # PULLBACK SHORT: price touched EMA9/21 zone then rejected
+    if (bias in (HTFBias.BEARISH, HTFBias.NEUTRAL)
+            and minus_di > plus_di
+            and ema_f < ema_m
+            and close < opn                          # bearish candle
+            and high >= ema_f * 0.998                # wick touched near EMA9
+            and close < ema_f                        # closed below EMA9
+            and 30 < rsi < 60):                      # not oversold
+        sl = ema_m + 1.0 * atr
+        tp = close - 1.5 * (sl - close)
+        return Signal(
+            type=SignalType.SHORT, source=SignalSource.MAIN,
+            regime=Regime.TRENDING, entry_price=close,
+            sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
+            reason=f"PB SHORT | ADX {adx:.0f} EMA bounce RSI {rsi:.0f}",
+        )
+
+    return None
+
+
 # ── ALERT MODE (1-min volume spike, filtered by HTF) ────────────────
 
 def check_alert_signal(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias) -> Signal | None:

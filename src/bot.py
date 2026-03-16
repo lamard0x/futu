@@ -8,7 +8,8 @@ from src.config import Config
 from src.exchange import Exchange
 from src.indicators import compute_all
 from src.strategy import (
-    scan_main, scan_alert, scan_trending_1h, confirm_on_5m, detect_htf_bias,
+    scan_main, scan_alert, scan_trending_1h, scan_trending_pullback,
+    confirm_on_5m, detect_htf_bias,
     Signal, SignalType, SignalSource, Regime, HTFBias,
 )
 from src.risk import RiskManager
@@ -57,6 +58,7 @@ class FutuBot:
         self.last_main_scan: datetime | None = None
         self.last_5m_scan: datetime | None = None
         self.last_trending_scan: datetime | None = None
+        self.last_trending_fast_scan: datetime | None = None
         self.last_htf_scan: datetime | None = None
         self.last_symbol_refresh: datetime | None = None
         self.running: bool = False
@@ -216,13 +218,21 @@ class FutuBot:
             await self._scan_all_symbols(self.config.timeframe.confirm_tf)
             self.last_5m_scan = now
 
-        # Trending scan every 1 hour (1H TF)
+        # Trending scan every 1 hour (1H TF) — breakout + pullback
         if self.config.trending.enabled and self._should_trending_scan(now):
             try:
                 await self._scan_trending_symbols()
             except Exception as e:
                 logger.error("Trending scan error: %s", e, exc_info=True)
             self.last_trending_scan = now
+
+        # 30m pullback scan — more frequent trend entries
+        if self.config.trending.enabled and self._should_trending_fast_scan(now):
+            try:
+                await self._scan_trending_pullback()
+            except Exception as e:
+                logger.error("Trending pullback scan error: %s", e, exc_info=True)
+            self.last_trending_fast_scan = now
 
     def _should_refresh_symbols(self, now: datetime) -> bool:
         if self.last_symbol_refresh is None:
@@ -254,6 +264,12 @@ class FutuBot:
             return True
         elapsed = (now - self.last_trending_scan).total_seconds()
         return elapsed >= self._tf_to_seconds(self.config.timeframe.trending_tf)
+
+    def _should_trending_fast_scan(self, now: datetime) -> bool:
+        if self.last_trending_fast_scan is None:
+            return True
+        elapsed = (now - self.last_trending_fast_scan).total_seconds()
+        return elapsed >= self._tf_to_seconds(self.config.timeframe.trending_tf_fast)
 
     def _tf_to_seconds(self, tf: str) -> int:
         unit = tf[-1]
@@ -412,6 +428,18 @@ class FutuBot:
                     logger.info("TREND SIGNAL: %s | R:R %.2f", signal.reason, rr)
                     signals_found += 1
                     await self._execute_trending(signal, sym)
+                    continue
+
+                # No breakout — try pullback on same 1H data
+                pb_signal = scan_trending_pullback(df, self.config.trending, state.bias)
+                if pb_signal and pb_signal.type != SignalType.NONE:
+                    rr_ok, rr = self.risk.check_rr(pb_signal)
+                    if not rr_ok:
+                        continue
+                    pb_signal.reason = f"[{sym.split('/')[0]}] {pb_signal.reason}"
+                    logger.info("PULLBACK SIGNAL: %s | R:R %.2f", pb_signal.reason, rr)
+                    signals_found += 1
+                    await self._execute_trending(pb_signal, sym)
             except Exception as e:
                 logger.warning("Trending scan error %s: %s", sym, e)
 
@@ -419,6 +447,53 @@ class FutuBot:
 
         if signals_found > 0:
             logger.info("Trending scan: %d signals found", signals_found)
+
+    async def _scan_trending_pullback(self):
+        """Scan top volume symbols for pullback signals on 30m."""
+        trending_syms = self.symbols
+        signals_found = 0
+
+        for sym in trending_syms:
+            state = self.states.get(sym)
+            if state is None:
+                self.states[sym] = SymbolState(symbol=sym)
+                await self.exchange.setup_symbol(sym)
+                state = self.states[sym]
+
+            if state.has_trending_position or state.has_position:
+                continue
+
+            can_trade, reason = self.risk.can_trade()
+            if not can_trade and "daily loss" in reason:
+                break
+
+            try:
+                candles = await self.exchange.fetch_candles(
+                    self.config.timeframe.trending_tf_fast,
+                    self.config.timeframe.candle_limit,
+                    symbol=sym,
+                )
+                if len(candles) < 30:
+                    continue
+
+                df = compute_all(candles, self.config.indicators)
+                signal = scan_trending_pullback(df, self.config.trending, state.bias)
+
+                if signal and signal.type != SignalType.NONE:
+                    rr_ok, rr = self.risk.check_rr(signal)
+                    if not rr_ok:
+                        continue
+                    signal.reason = f"[{sym.split('/')[0]}] {signal.reason}"
+                    logger.info("PB30 SIGNAL: %s | R:R %.2f", signal.reason, rr)
+                    signals_found += 1
+                    await self._execute_trending(signal, sym)
+            except Exception as e:
+                logger.warning("Pullback 30m scan error %s: %s", sym, e)
+
+            await asyncio.sleep(0.2)
+
+        if signals_found > 0:
+            logger.info("Pullback 30m scan: %d signals found", signals_found)
 
     async def _execute_trending(self, signal: Signal, symbol: str):
         """Execute trending trade — limit order at breakout level (retest entry). Half size."""
