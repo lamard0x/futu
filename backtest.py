@@ -100,11 +100,10 @@ def detect_htf_bias(df_htf, ind_cfg):
     last = df_htf.iloc[-1]
     ema_f = last.get(f"ema_{ind_cfg.ema_fast}", 0)
     ema_m = last.get(f"ema_{ind_cfg.ema_mid}", 0)
-    ema_s = last.get(f"ema_{ind_cfg.ema_slow}", 0)
-    adx = last.get("adx", 0) or 0
-    if ema_f > ema_m > ema_s and adx > 20:
+    # Simplified: EMA9 > EMA21 = bullish, EMA9 < EMA21 = bearish
+    if ema_f > ema_m:
         return "bullish"
-    if ema_f < ema_m < ema_s and adx > 20:
+    if ema_f < ema_m:
         return "bearish"
     return "neutral"
 

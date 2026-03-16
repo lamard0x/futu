@@ -47,16 +47,14 @@ class Signal:
 
 
 def detect_htf_bias(df_htf: pd.DataFrame) -> HTFBias:
-    """H4 trend direction — the boss that decides long or short."""
+    """H4 trend direction — simplified: EMA9 vs EMA21."""
     row = df_htf.iloc[-1]
     ema_f = row["ema_9"]
     ema_m = row["ema_21"]
-    ema_s = row["ema_50"]
-    adx = row.get("adx", 0)
 
-    if ema_f > ema_m > ema_s and adx > 20:
+    if ema_f > ema_m:
         return HTFBias.BULLISH
-    if ema_f < ema_m < ema_s and adx > 20:
+    if ema_f < ema_m:
         return HTFBias.BEARISH
     return HTFBias.NEUTRAL
 
