@@ -282,8 +282,8 @@ def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias)
                 reason=f"PB LONG | EMA21 wick {wick_pct:.0%} ADX {adx:.0f}",
             )
 
-        # Layer 2: EMA50 touch + any wick bounce
-        if ema_s > 0 and low <= ema_s * 1.002 and close > ema_s:
+        # Layer 2: EMA50 touch + 40% wick rejection
+        if ema_s > 0 and low <= ema_s * 1.002 and close > ema_s and wick_pct >= 0.4:
             entry = ema_s
             sl = ema_s - 1.5 * atr
             tp = entry + 2.0 * (entry - sl)
@@ -291,7 +291,7 @@ def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias)
                 type=SignalType.LONG, source=SignalSource.MAIN,
                 regime=Regime.TRENDING, entry_price=entry,
                 sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-                reason=f"PB LONG | EMA50 deep bounce ADX {adx:.0f}",
+                reason=f"PB LONG | EMA50 wick {wick_pct:.0%} ADX {adx:.0f}",
             )
 
     # ── SHORT ──
@@ -317,8 +317,8 @@ def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias)
                 reason=f"PB SHORT | EMA21 wick {wick_pct:.0%} ADX {adx:.0f}",
             )
 
-        # Layer 2: EMA50 touch + any wick bounce
-        if ema_s > 0 and high >= ema_s * 0.998 and close < ema_s:
+        # Layer 2: EMA50 touch + 40% wick rejection
+        if ema_s > 0 and high >= ema_s * 0.998 and close < ema_s and wick_pct >= 0.4:
             entry = ema_s
             sl = ema_s + 1.5 * atr
             tp = entry - 2.0 * (sl - entry)
@@ -326,7 +326,7 @@ def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias)
                 type=SignalType.SHORT, source=SignalSource.MAIN,
                 regime=Regime.TRENDING, entry_price=entry,
                 sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-                reason=f"PB SHORT | EMA50 deep bounce ADX {adx:.0f}",
+                reason=f"PB SHORT | EMA50 wick {wick_pct:.0%} ADX {adx:.0f}",
             )
 
     return None
