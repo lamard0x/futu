@@ -176,13 +176,10 @@ class Exchange:
         self, side: str, amount: float,
         tp_price: Optional[float] = None, sl_price: Optional[float] = None,
     ) -> OrderResult:
+        # Step 1: Place market order (no TP/SL — OKX rejects inline TP/SL)
         params = {}
         if self.exchange_name == "okx":
             params["tdMode"] = self.config.margin_mode
-        if tp_price is not None:
-            params["takeProfit"] = {"triggerPrice": tp_price}
-        if sl_price is not None:
-            params["stopLoss"] = {"triggerPrice": sl_price}
 
         await self.rate_limiter.acquire("create_order")
         order = await retry_api_call(
@@ -192,6 +189,15 @@ class Exchange:
         )
         logger.info("Market order: %s %s %.4f | status=%s id=%s",
                     side, self.config.symbol, amount, order.get("status"), order.get("id"))
+
+        # Step 2: Set TP/SL separately after order fills
+        if tp_price is not None or sl_price is not None:
+            try:
+                await asyncio.sleep(0.5)  # wait for fill
+                await self.update_tp_sl(tp_price=tp_price, sl_price=sl_price)
+            except Exception as e:
+                logger.warning("Set TP/SL after order error: %s", e)
+
         return OrderResult(
             order_id=order["id"], symbol=order["symbol"],
             side=side, price=float(order.get("average") or order.get("price") or 0),

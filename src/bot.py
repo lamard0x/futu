@@ -422,7 +422,7 @@ class FutuBot:
         tp_target = signal.tp1_price
 
         logger.info(
-            "TRENDING EXEC %s: %s %.6f @ %.2f | SL: %.2f | TP: %.2f",
+            "TRENDING EXEC %s: %s %.6f @ %g | SL: %g | TP: %g",
             symbol.split("/")[0], side, amount, signal.entry_price,
             signal.sl_price, tp_target,
         )
@@ -483,7 +483,7 @@ class FutuBot:
         rr = abs(tp_target - signal.entry_price) / abs(signal.entry_price - signal.sl_price) if signal.sl_price != signal.entry_price else 0
 
         logger.info(
-            "EXEC %s: %s %.6f @ %.2f | SL: %.2f | TP: %.2f",
+            "EXEC %s: %s %.6f @ %g | SL: %g | TP: %g",
             symbol.split("/")[0], side, amount, signal.entry_price,
             signal.sl_price, tp_target,
         )
