@@ -181,14 +181,27 @@ class Exchange:
         if self.exchange_name == "okx":
             params["tdMode"] = self.config.margin_mode
 
+        # Convert coin amount to contract count for OKX
+        order_amount = amount
+        if self.exchange_name == "okx" and self.config.symbol in self.exchange.markets:
+            market = self.exchange.markets[self.config.symbol]
+            ct_val = float(market.get("contractSize") or market.get("info", {}).get("ctVal") or 1)
+            if ct_val > 0 and ct_val != 1:
+                order_amount = int(amount / ct_val)
+            else:
+                order_amount = int(amount)
+            if order_amount <= 0:
+                order_amount = 1
+            logger.info("Amount: %.6f coins -> %d contracts (ctVal=%s)", amount, order_amount, ct_val)
+
         await self.rate_limiter.acquire("create_order")
         order = await retry_api_call(
             self.exchange.create_order,
             symbol=self.config.symbol, type="market",
-            side=side, amount=amount, params=params,
+            side=side, amount=order_amount, params=params,
         )
-        logger.info("Market order: %s %s %.4f | status=%s id=%s",
-                    side, self.config.symbol, amount, order.get("status"), order.get("id"))
+        logger.info("Market order: %s %s %s | status=%s id=%s",
+                    side, self.config.symbol, order_amount, order.get("status"), order.get("id"))
 
         # Step 2: Set TP/SL separately after order fills
         if tp_price is not None or sl_price is not None:
