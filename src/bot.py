@@ -256,7 +256,9 @@ class FutuBot:
 
     async def _update_all_htf_bias(self):
         biases = {}
-        for sym in self.symbols:
+        # Scan both trending (top volume) + ranging (fixed list)
+        all_syms = set(self.symbols) | set(self.config.risk.ranging_symbols)
+        for sym in all_syms:
             try:
                 candles = await self.exchange.fetch_candles(
                     self.config.timeframe.htf, 200, symbol=sym,
