@@ -761,21 +761,23 @@ class FutuBot:
                 row = df.iloc[-1]
                 new_sl = None
 
+                last_price = row["close"]
+
                 if position["side"] == "long":
                     chandelier = row["chandelier_long"]
-                    logger.info("%s chandelier=%.2f entry=%.2f (need chand > entry)",
-                                symbol.split("/")[0], chandelier, entry)
-                    if chandelier > entry:
+                    # Must be: chandelier > entry AND chandelier < last price
+                    if chandelier > entry and chandelier < last_price:
                         new_sl = chandelier
                 elif position["side"] == "short":
                     chandelier = row["chandelier_short"]
-                    if chandelier < entry:
+                    # Must be: chandelier < entry AND chandelier > last price
+                    if chandelier < entry and chandelier > last_price:
                         new_sl = chandelier
 
                 if new_sl is not None:
                     logger.info(
-                        "%s %s trailing SL: %g → %g (pnl: %.2f%%)",
-                        symbol.split("/")[0], regime, entry, new_sl, pnl_pct * 100,
+                        "%s %s trailing SL: %g → %g (last=%g pnl: %.2f%%)",
+                        symbol.split("/")[0], regime, entry, new_sl, last_price, pnl_pct * 100,
                     )
                     # Update SL + re-set TP (cancel_algo removes both)
                     await self.exchange.update_tp_sl(
