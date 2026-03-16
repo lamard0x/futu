@@ -128,7 +128,7 @@ class TimeframeConfig:
     htf: str = "4h"
     main_tf: str = "15m"
     confirm_tf: str = "5m"
-    trending_tf: str = "1h"
+    trending_tf: str = "30m"
     trending_tf_fast: str = "30m"
     alert_tf: str = "1m"
     candle_limit: int = 200
