@@ -134,11 +134,12 @@ def scan_ranging(row, bias, cfg):
     bbu = row.get("bb_upper") or 0
     bbl = row.get("bb_lower") or 0
     bbm = row.get("bb_mid") or 0
+    ema21 = row.get(f"ema_{IND_CFG.ema_mid}") or 0
 
     if atr <= 0 or adx >= cfg.adx_trending:
         return None
 
-    # LONG: price touches lower BB + RSI oversold + volume confirmation
+    # LONG: price touches lower BB + RSI oversold
     if bias != "bearish":
         if (bbl > 0 and close <= bbl * (1 + cfg.bb_touch_pct / 100)
                 and rsi < cfg.rsi_oversold
@@ -333,25 +334,30 @@ async def run_backtest():
         short = symbol.split("/")[0]
         log.info("\n--- %s ---", short)
 
-        raw_main = await fetch_ohlcv(ex, symbol, MAIN_TF, since_ms)
+        raw_15m = await fetch_ohlcv(ex, symbol, "15m", since_ms)
+        raw_5m = await fetch_ohlcv(ex, symbol, "5m", since_ms)
         raw_4h = await fetch_ohlcv(ex, symbol, "4h", since_ms)
         is_trending_sym = symbol in TRENDING_SYMBOLS
         raw_1h = await fetch_ohlcv(ex, symbol, "1h", since_ms) if is_trending_sym else []
 
-        if len(raw_main) < 200 or len(raw_4h) < 20:
+        if len(raw_15m) < 200 or len(raw_5m) < 200 or len(raw_4h) < 20:
             log.info("SKIP %s — not enough data", short)
             continue
         if is_trending_sym and len(raw_1h) < 50:
             log.info("SKIP %s trending — not enough 1H data", short)
             is_trending_sym = False
 
-        df_main = ohlcv_to_df(raw_main)
+        df_15m = ohlcv_to_df(raw_15m)
+        df_5m = ohlcv_to_df(raw_5m)
         df_1h = ohlcv_to_df(raw_1h) if is_trending_sym else None
         df_4h = ohlcv_to_df(raw_4h)
 
-        candles_main = [{"timestamp": int(ts.timestamp() * 1000), "open": r["open"], "high": r["high"],
-                         "low": r["low"], "close": r["close"], "volume": r["volume"]}
-                        for ts, r in df_main.iterrows()]
+        candles_15m = [{"timestamp": int(ts.timestamp() * 1000), "open": r["open"], "high": r["high"],
+                        "low": r["low"], "close": r["close"], "volume": r["volume"]}
+                       for ts, r in df_15m.iterrows()]
+        candles_5m = [{"timestamp": int(ts.timestamp() * 1000), "open": r["open"], "high": r["high"],
+                       "low": r["low"], "close": r["close"], "volume": r["volume"]}
+                      for ts, r in df_5m.iterrows()]
         candles_1h = ([{"timestamp": int(ts.timestamp() * 1000), "open": r["open"], "high": r["high"],
                         "low": r["low"], "close": r["close"], "volume": r["volume"]}
                        for ts, r in df_1h.iterrows()] if is_trending_sym else [])
@@ -360,7 +366,8 @@ async def run_backtest():
                        "low": r["low"], "close": r["close"], "volume": r["volume"]}
                       for ts, r in df_4h.iterrows()]
 
-        df_main_ind = compute_all(candles_main, IND_CFG)
+        df_15m_ind = compute_all(candles_15m, IND_CFG)
+        df_5m_ind = compute_all(candles_5m, IND_CFG)
         df_1h_ind = compute_all(candles_1h, IND_CFG) if is_trending_sym else None
         df_4h_ind = compute_all(candles_4h, IND_CFG)
 
@@ -407,19 +414,33 @@ async def run_backtest():
             if dd > state.max_drawdown:
                 state.max_drawdown = dd
 
-        # ═══ Ranging on 5m (single pass, matches live scan) ═══
-        last_close_bar = {}  # {symbol: bar_index} — prevent instant re-entry
-        for i in range(IND_CFG.ema_slow + 5, len(df_main_ind)):
-            bar_time = df_main_ind.index[i]
+        # ═══ Ranging: 15m detect + 5m confirm ═══
+        # Build 15m signal lookup: {timestamp -> signal_direction}
+        flags_15m = {}  # {bar_time: "long" or "short"}
+        for i in range(IND_CFG.ema_slow + 5, len(df_15m_ind)):
+            bar_time = df_15m_ind.index[i]
             if bar_time.replace(tzinfo=timezone.utc) < backtest_start:
                 continue
-            row = df_main_ind.iloc[i]
+            row = df_15m_ind.iloc[i]
+            bias = get_bias(bar_time)
+            rsig = scan_ranging(row, bias, STRAT_CFG)
+            if rsig:
+                # Flag valid for this 15m bar + next 2 (= 15 min window)
+                flags_15m[bar_time] = rsig["side"]
+
+        # Iterate 5m bars — check exits + confirm flagged signals
+        for i in range(IND_CFG.ema_slow + 5, len(df_5m_ind)):
+            bar_time = df_5m_ind.index[i]
+            if bar_time.replace(tzinfo=timezone.utc) < backtest_start:
+                continue
+            row = df_5m_ind.iloc[i]
 
             day_str = bar_time.strftime("%Y-%m-%d")
             if state.daily_date != day_str:
                 state.daily_loss = 0.0
                 state.daily_date = day_str
 
+            # Exit check on 5m bars (granular)
             closed = []
             for t in state.open_ranging:
                 if t.symbol != symbol:
@@ -430,26 +451,58 @@ async def run_backtest():
                 if result:
                     close_trade(t, result[0], result[1], bar_time)
                     closed.append(t)
-                    last_close_bar[symbol] = i
             for t in closed:
                 state.open_ranging.remove(t)
 
             if state.daily_loss >= state.balance * RISK_CFG.max_daily_loss_pct:
                 continue
-
-            # Must wait at least 1 bar after close before re-entry
-            if symbol in last_close_bar and i <= last_close_bar[symbol] + 1:
+            if any(t.symbol == symbol for t in state.open_ranging):
                 continue
 
-            bias = get_bias(bar_time)
-            if not any(t.symbol == symbol for t in state.open_ranging):
+            # Find active 15m flag for this 5m bar
+            # 15m bar covers 3x 5m bars, so check which 15m bar this falls in
+            active_flag = None
+            for flag_time, direction in flags_15m.items():
+                # 5m bar must be within 15 minutes after 15m flag
+                diff = (bar_time - flag_time).total_seconds()
+                if 0 <= diff < 900:  # within 15 min window
+                    active_flag = direction
+                    break
+
+            if active_flag is None:
+                continue
+
+            # 5m confirm: check if 5m agrees with flagged direction
+            rsi_5m = row.get("rsi") or 50
+            close_5m = row["close"]
+            bb_mid_5m = row.get("bb_mid") or close_5m
+
+            if active_flag == "long" and (close_5m <= bb_mid_5m or rsi_5m < 45):
+                # 5m confirms long: price below BB mid or RSI low
+                bias = get_bias(bar_time)
                 rsig = scan_ranging(row, bias, STRAT_CFG)
-                if rsig:
+                if rsig and rsig["side"] == "long":
                     amt, notional = calc_position_size(
                         state.balance, rsig["entry"], rsig["sl"],
                         RISK_CFG.risk_per_trade_main, LEVERAGE)
                     if amt > 0:
-                        trade = Trade(symbol=symbol, side=rsig["side"], regime="ranging",
+                        trade = Trade(symbol=symbol, side="long", regime="ranging",
+                                      entry_price=rsig["entry"], sl_price=rsig["sl"],
+                                      tp_price=rsig["tp"], size=amt, notional=notional,
+                                      entry_time=str(bar_time))
+                        state.open_ranging.append(trade)
+                        sym_ranging += 1
+
+            elif active_flag == "short" and (close_5m >= bb_mid_5m or rsi_5m > 55):
+                # 5m confirms short: price above BB mid or RSI high
+                bias = get_bias(bar_time)
+                rsig = scan_ranging(row, bias, STRAT_CFG)
+                if rsig and rsig["side"] == "short":
+                    amt, notional = calc_position_size(
+                        state.balance, rsig["entry"], rsig["sl"],
+                        RISK_CFG.risk_per_trade_main, LEVERAGE)
+                    if amt > 0:
+                        trade = Trade(symbol=symbol, side="short", regime="ranging",
                                       entry_price=rsig["entry"], sl_price=rsig["sl"],
                                       tp_price=rsig["tp"], size=amt, notional=notional,
                                       entry_time=str(bar_time))
