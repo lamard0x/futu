@@ -246,7 +246,7 @@ class Exchange:
             logger.warning("Update TP/SL error: %s", e)
 
     async def _update_tp_sl_generic(self, tp_price, sl_price):
-        """Update TP/SL on OKX using algo order API (conditional orders)."""
+        """Update TP/SL on OKX — cancel old algos, place new TP and SL separately."""
         try:
             position = await self.get_position()
             if position is None:
@@ -259,35 +259,51 @@ class Exchange:
             # Cancel existing algo orders first
             await self._cancel_algo_orders()
 
-            # Place SL as conditional algo order
+            # Place SL + TP as single algo order (OKX supports both in one)
+            params = {
+                "instId": inst_id,
+                "tdMode": self.config.margin_mode,
+                "side": close_side,
+                "ordType": "conditional",
+                "sz": size,
+            }
             if sl_price is not None:
-                await self.rate_limiter.acquire("create_order")
-                await self.exchange.private_post_trade_order_algo({
-                    "instId": inst_id,
-                    "tdMode": self.config.margin_mode,
-                    "side": close_side,
-                    "ordType": "conditional",
-                    "sz": size,
-                    "slTriggerPx": str(sl_price),
-                    "slOrdPx": "-1",  # market price
-                    "reduceOnly": "true",
-                })
-
-            # Place TP as conditional algo order
+                params["slTriggerPx"] = str(sl_price)
+                params["slOrdPx"] = "-1"
             if tp_price is not None:
-                await self.rate_limiter.acquire("create_order")
-                await self.exchange.private_post_trade_order_algo({
-                    "instId": inst_id,
-                    "tdMode": self.config.margin_mode,
-                    "side": close_side,
-                    "ordType": "conditional",
-                    "sz": size,
-                    "tpTriggerPx": str(tp_price),
-                    "tpOrdPx": "-1",  # market price
-                    "reduceOnly": "true",
-                })
+                params["tpTriggerPx"] = str(tp_price)
+                params["tpOrdPx"] = "-1"
 
-            logger.info("TP/SL set: TP=%s SL=%s", tp_price or "-", sl_price or "-")
+            if sl_price is not None or tp_price is not None:
+                await self.rate_limiter.acquire("create_order")
+                try:
+                    await self.exchange.private_post_trade_order_algo(params)
+                    logger.info("TP/SL set: TP=%s SL=%s", tp_price or "-", sl_price or "-")
+                except Exception as e:
+                    # Fallback: try TP and SL separately
+                    logger.warning("Combined TP/SL failed: %s — trying separate", e)
+                    if sl_price is not None:
+                        try:
+                            await self.rate_limiter.acquire("create_order")
+                            await self.exchange.private_post_trade_order_algo({
+                                "instId": inst_id, "tdMode": self.config.margin_mode,
+                                "side": close_side, "ordType": "conditional", "sz": size,
+                                "slTriggerPx": str(sl_price), "slOrdPx": "-1",
+                            })
+                            logger.info("SL set: %s", sl_price)
+                        except Exception as e2:
+                            logger.warning("SL failed: %s", e2)
+                    if tp_price is not None:
+                        try:
+                            await self.rate_limiter.acquire("create_order")
+                            await self.exchange.private_post_trade_order_algo({
+                                "instId": inst_id, "tdMode": self.config.margin_mode,
+                                "side": close_side, "ordType": "conditional", "sz": size,
+                                "tpTriggerPx": str(tp_price), "tpOrdPx": "-1",
+                            })
+                            logger.info("TP set: %s", tp_price)
+                        except Exception as e3:
+                            logger.warning("TP failed: %s", e3)
         except Exception as e:
             logger.warning("Update TP/SL error: %s", e)
 

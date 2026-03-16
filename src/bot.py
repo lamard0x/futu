@@ -770,9 +770,10 @@ class FutuBot:
 
                 if new_sl is not None:
                     logger.info(
-                        "%s %s trailing SL: %.2f (pnl: %.2f%%)",
-                        symbol.split("/")[0], regime, new_sl, pnl_pct * 100,
+                        "%s %s trailing SL: %g → %g (pnl: %.2f%%)",
+                        symbol.split("/")[0], regime, entry, new_sl, pnl_pct * 100,
                     )
+                    # Only update SL, keep existing TP
                     await self.exchange.update_tp_sl(sl_price=new_sl)
         finally:
             self.exchange.config.symbol = orig_symbol
