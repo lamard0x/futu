@@ -47,8 +47,8 @@ class StrategyConfig:
     volume_trend_mult: float = 1.0
 
     # Ranging mode entry — optimized via backtest (set C)
-    rsi_oversold: float = 42.0
-    rsi_overbought: float = 58.0
+    rsi_oversold: float = 35.0
+    rsi_overbought: float = 65.0
     bb_touch_pct: float = 0.8
     volume_range_mult: float = 0.6
 
