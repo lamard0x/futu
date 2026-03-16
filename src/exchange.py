@@ -246,7 +246,9 @@ class Exchange:
             logger.warning("Update TP/SL error: %s", e)
 
     async def _update_tp_sl_generic(self, tp_price, sl_price):
-        """Update TP/SL on OKX — cancel old algos, place new TP and SL separately."""
+        """Update TP/SL on OKX — TP and SL are SEPARATE algo orders.
+        Trailing only cancels+replaces SL, never touches TP.
+        """
         try:
             position = await self.get_position()
             if position is None:
@@ -256,56 +258,63 @@ class Exchange:
             close_side = "sell" if position["side"] == "long" else "buy"
             size = str(int(position["size"]))
 
-            # Cancel existing algo orders first
-            await self._cancel_algo_orders()
-
-            # Place SL + TP as single algo order (OKX supports both in one)
-            params = {
-                "instId": inst_id,
-                "tdMode": self.config.margin_mode,
-                "side": close_side,
-                "ordType": "conditional",
-                "sz": size,
-            }
             if sl_price is not None:
-                params["slTriggerPx"] = str(sl_price)
-                params["slOrdPx"] = "-1"
-            if tp_price is not None:
-                params["tpTriggerPx"] = str(tp_price)
-                params["tpOrdPx"] = "-1"
-
-            if sl_price is not None or tp_price is not None:
+                # Cancel only SL algo orders, keep TP
+                await self._cancel_sl_orders()
                 await self.rate_limiter.acquire("create_order")
-                try:
-                    await self.exchange.private_post_trade_order_algo(params)
-                    logger.info("TP/SL set: TP=%s SL=%s", tp_price or "-", sl_price or "-")
-                except Exception as e:
-                    # Fallback: try TP and SL separately
-                    logger.warning("Combined TP/SL failed: %s — trying separate", e)
-                    if sl_price is not None:
-                        try:
-                            await self.rate_limiter.acquire("create_order")
-                            await self.exchange.private_post_trade_order_algo({
-                                "instId": inst_id, "tdMode": self.config.margin_mode,
-                                "side": close_side, "ordType": "conditional", "sz": size,
-                                "slTriggerPx": str(sl_price), "slOrdPx": "-1",
-                            })
-                            logger.info("SL set: %s", sl_price)
-                        except Exception as e2:
-                            logger.warning("SL failed: %s", e2)
-                    if tp_price is not None:
-                        try:
-                            await self.rate_limiter.acquire("create_order")
-                            await self.exchange.private_post_trade_order_algo({
-                                "instId": inst_id, "tdMode": self.config.margin_mode,
-                                "side": close_side, "ordType": "conditional", "sz": size,
-                                "tpTriggerPx": str(tp_price), "tpOrdPx": "-1",
-                            })
-                            logger.info("TP set: %s", tp_price)
-                        except Exception as e3:
-                            logger.warning("TP failed: %s", e3)
+                await self.exchange.private_post_trade_order_algo({
+                    "instId": inst_id, "tdMode": self.config.margin_mode,
+                    "side": close_side, "ordType": "conditional", "sz": size,
+                    "slTriggerPx": str(sl_price), "slOrdPx": "-1",
+                })
+                logger.info("SL set: %s", sl_price)
+
+            if tp_price is not None:
+                # Cancel only TP algo orders, keep SL
+                await self._cancel_tp_orders()
+                await self.rate_limiter.acquire("create_order")
+                await self.exchange.private_post_trade_order_algo({
+                    "instId": inst_id, "tdMode": self.config.margin_mode,
+                    "side": close_side, "ordType": "conditional", "sz": size,
+                    "tpTriggerPx": str(tp_price), "tpOrdPx": "-1",
+                })
+                logger.info("TP set: %s", tp_price)
+
         except Exception as e:
             logger.warning("Update TP/SL error: %s", e)
+
+    async def _cancel_sl_orders(self):
+        """Cancel only SL algo orders for current symbol."""
+        await self._cancel_algo_by_type("sl")
+
+    async def _cancel_tp_orders(self):
+        """Cancel only TP algo orders for current symbol."""
+        await self._cancel_algo_by_type("tp")
+
+    async def _cancel_algo_by_type(self, order_type: str):
+        """Cancel SL or TP algo orders. order_type = 'sl' or 'tp'."""
+        inst_id = self.config.symbol.replace("/", "-").replace(":USDT", "-SWAP")
+        try:
+            await self.rate_limiter.acquire("fetch_open_orders")
+            result = await self.exchange.private_get_trade_orders_algo_pending({
+                "instId": inst_id, "ordType": "conditional",
+            })
+            for o in result.get("data", []):
+                algo_id = o.get("algoId")
+                has_sl = bool(o.get("slTriggerPx"))
+                has_tp = bool(o.get("tpTriggerPx"))
+                should_cancel = (order_type == "sl" and has_sl and not has_tp) or \
+                                (order_type == "tp" and has_tp and not has_sl)
+                if algo_id and should_cancel:
+                    try:
+                        await self.rate_limiter.acquire("cancel_order")
+                        await self.exchange.private_post_trade_cancel_algos([{
+                            "algoId": algo_id, "instId": inst_id,
+                        }])
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     async def _cancel_algo_orders(self):
         """Cancel ALL algo (TP/SL/trigger) orders for current symbol on OKX."""

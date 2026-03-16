@@ -779,11 +779,8 @@ class FutuBot:
                         "%s %s trailing SL: %g → %g (last=%g pnl: %.2f%%)",
                         symbol.split("/")[0], regime, entry, new_sl, last_price, pnl_pct * 100,
                     )
-                    # Update SL + re-set TP (cancel_algo removes both)
-                    await self.exchange.update_tp_sl(
-                        sl_price=new_sl,
-                        tp_price=state.tp_price if state.tp_price > 0 else None,
-                    )
+                    # Only update SL — TP stays untouched (separate algo order)
+                    await self.exchange.update_tp_sl(sl_price=new_sl)
         finally:
             self.exchange.config.symbol = orig_symbol
 
