@@ -85,7 +85,7 @@ class RiskConfig:
         "SUI/USDT:USDT",
     ])
     max_positions: int = 999  # unlimited, 1 per symbol per regime
-    max_symbols: int = 20
+    max_symbols: int = 15
     cooldown_candles: int = 0
     min_rr_trending: float = 1.3
     min_rr_ranging: float = 1.2
@@ -119,7 +119,7 @@ class TrendingConfig:
     sl_atr: float = 2.0
     max_hold_bars: int = 0  # disabled — let TP/SL handle exit
     # Only trade top volume symbols for trending
-    use_top_volume: bool = True  # auto top 20 volume for trending
+    use_top_volume: bool = True  # auto top 15 volume for trending
     symbols: list = field(default_factory=list)  # empty = use top volume
 
 

@@ -418,19 +418,8 @@ class FutuBot:
                     continue
 
                 df = compute_all(candles, self.config.indicators)
-                signal = scan_trending_1h(df, self.config.trending, state.bias)
 
-                if signal and signal.type != SignalType.NONE:
-                    rr_ok, rr = self.risk.check_rr(signal)
-                    if not rr_ok:
-                        continue
-                    signal.reason = f"[{sym.split('/')[0]}] {signal.reason}"
-                    logger.info("TREND SIGNAL: %s | R:R %.2f", signal.reason, rr)
-                    signals_found += 1
-                    await self._execute_trending(signal, sym)
-                    continue
-
-                # No breakout — try pullback on same 1H data
+                # Pullback only — no breakout (breakout = chasing price)
                 pb_signal = scan_trending_pullback(df, self.config.trending, state.bias)
                 if pb_signal and pb_signal.type != SignalType.NONE:
                     rr_ok, rr = self.risk.check_rr(pb_signal)
