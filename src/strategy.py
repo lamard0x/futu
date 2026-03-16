@@ -91,7 +91,7 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias) -> 
 
     entry = close
     sl = entry - cfg.main_sl_ranging_atr_mult * atr
-    tp1 = bb_mid
+    tp1 = entry + (bb_mid - entry) * 0.85  # 85% distance to BB mid
 
     return Signal(
         type=SignalType.LONG,
@@ -129,7 +129,7 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias) ->
 
     entry = close
     sl = entry + cfg.main_sl_ranging_atr_mult * atr
-    tp1 = bb_mid
+    tp1 = entry - (entry - bb_mid) * 0.85  # 85% distance to BB mid
 
     return Signal(
         type=SignalType.SHORT,
