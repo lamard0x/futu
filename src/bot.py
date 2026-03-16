@@ -121,7 +121,20 @@ class FutuBot:
                 if sym not in self.states:
                     self.states[sym] = SymbolState(symbol=sym)
                 self.states[sym].has_position = True
-                self.states[sym].limit_order_id = None  # clear any stale limit state
+                self.states[sym].limit_order_id = None
+                # Try to get TP from existing algo orders
+                try:
+                    inst_id = sym.replace("/", "-").replace(":USDT", "-SWAP")
+                    r = await self.exchange.exchange.private_get_trade_orders_algo_pending({
+                        "instId": inst_id, "ordType": "conditional",
+                    })
+                    for o in r.get("data", []):
+                        tp_px = o.get("tpTriggerPx")
+                        if tp_px:
+                            self.states[sym].tp_price = float(tp_px)
+                            logger.info("Synced TP for %s: %s", sym.split("/")[0], tp_px)
+                except Exception:
+                    pass
                 synced += 1
                 logger.info("Synced position: %s %s %.4f @ %.2f",
                             sym.split("/")[0], p.get("side", "?"),
