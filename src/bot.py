@@ -748,39 +748,32 @@ class FutuBot:
                 )
                 return
 
-            # Trailing SL (chandelier) — activate after >0.3% profit
+            # Move SL to breakeven when price reaches 50% of TP distance
             entry = position["entry_price"]
-            notional = entry * position["size"] if position["size"] > 0 else 1
-            pnl_pct = position["unrealized_pnl"] / notional
+            tp = state.tp_price
+            mark = float(position.get("markPrice") or entry)
 
-            logger.info("%s pnl=%.2f%% (need >0.3%% for trailing)", symbol.split("/")[0], pnl_pct * 100)
-            if pnl_pct > 0.003:
-                tf = self.config.timeframe.trending_tf if regime == "trending" else self.config.timeframe.main_tf
-                candles = await self.exchange.fetch_candles(tf, 30, symbol=symbol)
-                df = compute_all(candles, self.config.indicators)
-                row = df.iloc[-1]
-                new_sl = None
-
-                last_price = row["close"]
-
+            if tp > 0 and not state.partial_closed:
                 if position["side"] == "long":
-                    chandelier = row["chandelier_long"]
-                    # Must be: chandelier > entry AND chandelier < last price
-                    if chandelier > entry and chandelier < last_price:
-                        new_sl = chandelier
+                    tp_dist = tp - entry
+                    mid_point = entry + tp_dist * 0.5
+                    if tp_dist > 0 and mark >= mid_point:
+                        logger.info(
+                            "%s %s SL → breakeven (mark %g >= 50%% target %g)",
+                            symbol.split("/")[0], regime, mark, mid_point,
+                        )
+                        await self.exchange.update_tp_sl(sl_price=entry)
+                        state.partial_closed = True
                 elif position["side"] == "short":
-                    chandelier = row["chandelier_short"]
-                    # Must be: chandelier < entry AND chandelier > last price
-                    if chandelier < entry and chandelier > last_price:
-                        new_sl = chandelier
-
-                if new_sl is not None:
-                    logger.info(
-                        "%s %s trailing SL: %g → %g (last=%g pnl: %.2f%%)",
-                        symbol.split("/")[0], regime, entry, new_sl, last_price, pnl_pct * 100,
-                    )
-                    # Only update SL — TP stays untouched (separate algo order)
-                    await self.exchange.update_tp_sl(sl_price=new_sl)
+                    tp_dist = entry - tp
+                    mid_point = entry - tp_dist * 0.5
+                    if tp_dist > 0 and mark <= mid_point:
+                        logger.info(
+                            "%s %s SL → breakeven (mark %g <= 50%% target %g)",
+                            symbol.split("/")[0], regime, mark, mid_point,
+                        )
+                        await self.exchange.update_tp_sl(sl_price=entry)
+                        state.partial_closed = True
         finally:
             self.exchange.config.symbol = orig_symbol
 
