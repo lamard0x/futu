@@ -177,8 +177,11 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
         return None
 
     entry = close
+    if bb_mid <= entry:
+        logger.debug("SKIP LONG %s: price above BB mid (no room for TP)", symbol)
+        return None
     sl = entry - cfg.main_sl_ranging_atr_mult * atr
-    tp1 = entry + (bb_mid - entry) * 0.50  # 50% distance to BB mid — hit faster
+    tp1 = entry + (bb_mid - entry) * 0.50  # 50% distance to BB mid
 
     return Signal(
         type=SignalType.LONG,
@@ -241,8 +244,11 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
         return None
 
     entry = close
+    if bb_mid >= entry:
+        logger.debug("SKIP SHORT %s: price below BB mid (no room for TP)", symbol)
+        return None
     sl = entry + cfg.main_sl_ranging_atr_mult * atr
-    tp1 = entry - (entry - bb_mid) * 0.50  # 50% distance to BB mid — hit faster
+    tp1 = entry - (entry - bb_mid) * 0.50  # 50% distance to BB mid
 
     return Signal(
         type=SignalType.SHORT,
