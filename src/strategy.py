@@ -400,29 +400,34 @@ def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias,
         ema21_dist = (low - ema_m) / ema_m * 100 if ema_m > 0 else 99
         ema50_dist = (low - ema_s) / ema_s * 100 if ema_s > 0 else 99
 
-        # Layer 1: EMA21 touch + 40% wick rejection
-        if low <= ema_m * 1.002 and close > ema_m and wick_pct >= 0.4:
-            entry = ema_m
-            sl = ema_m - 1.5 * atr
-            tp = entry + 2.0 * (entry - sl)
-            return Signal(
-                type=SignalType.LONG, source=SignalSource.MAIN,
-                regime=Regime.TRENDING, entry_price=entry,
-                sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-                reason=f"PB LONG | EMA21 wick {wick_pct:.0%} ADX {adx:.0f}",
-            )
+        # Demand zone filter
+        demand_zones = find_demand_zones(df)
+        if not in_demand_zone(low, demand_zones):
+            logger.debug("SKIP PB LONG %s: no demand zone near %.2f", symbol, low)
+        else:
+            # Layer 1: EMA21 touch + 40% wick rejection
+            if low <= ema_m * 1.002 and close > ema_m and wick_pct >= 0.4:
+                entry = ema_m
+                sl = ema_m - 1.5 * atr
+                tp = entry + 2.0 * (entry - sl)
+                return Signal(
+                    type=SignalType.LONG, source=SignalSource.MAIN,
+                    regime=Regime.TRENDING, entry_price=entry,
+                    sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
+                    reason=f"PB LONG | EMA21 wick {wick_pct:.0%} ADX {adx:.0f} + demand",
+                )
 
-        # Layer 2: EMA50 touch + 40% wick rejection
-        if ema_s > 0 and low <= ema_s * 1.002 and close > ema_s and wick_pct >= 0.4:
-            entry = ema_s
-            sl = ema_s - 1.5 * atr
-            tp = entry + 2.0 * (entry - sl)
-            return Signal(
-                type=SignalType.LONG, source=SignalSource.MAIN,
-                regime=Regime.TRENDING, entry_price=entry,
-                sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-                reason=f"PB LONG | EMA50 wick {wick_pct:.0%} ADX {adx:.0f}",
-            )
+            # Layer 2: EMA50 touch + 40% wick rejection
+            if ema_s > 0 and low <= ema_s * 1.002 and close > ema_s and wick_pct >= 0.4:
+                entry = ema_s
+                sl = ema_s - 1.5 * atr
+                tp = entry + 2.0 * (entry - sl)
+                return Signal(
+                    type=SignalType.LONG, source=SignalSource.MAIN,
+                    regime=Regime.TRENDING, entry_price=entry,
+                    sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
+                    reason=f"PB LONG | EMA50 wick {wick_pct:.0%} ADX {adx:.0f} + demand",
+                )
 
         # Log why pullback didn't trigger
         reasons = []
@@ -466,29 +471,34 @@ def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias,
         ema21_dist = (ema_m - high) / ema_m * 100 if ema_m > 0 else 99
         ema50_dist = (ema_s - high) / ema_s * 100 if ema_s > 0 else 99
 
-        # Layer 1: EMA21 touch + 40% wick rejection
-        if high >= ema_m * 0.998 and close < ema_m and wick_pct >= 0.4:
-            entry = ema_m
-            sl = ema_m + 1.5 * atr
-            tp = entry - 2.0 * (sl - entry)
-            return Signal(
-                type=SignalType.SHORT, source=SignalSource.MAIN,
-                regime=Regime.TRENDING, entry_price=entry,
-                sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-                reason=f"PB SHORT | EMA21 wick {wick_pct:.0%} ADX {adx:.0f}",
-            )
+        # Supply zone filter
+        supply_zones = find_supply_zones(df)
+        if not in_supply_zone(high, supply_zones):
+            logger.debug("SKIP PB SHORT %s: no supply zone near %.2f", symbol, high)
+        else:
+            # Layer 1: EMA21 touch + 40% wick rejection
+            if high >= ema_m * 0.998 and close < ema_m and wick_pct >= 0.4:
+                entry = ema_m
+                sl = ema_m + 1.5 * atr
+                tp = entry - 2.0 * (sl - entry)
+                return Signal(
+                    type=SignalType.SHORT, source=SignalSource.MAIN,
+                    regime=Regime.TRENDING, entry_price=entry,
+                    sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
+                    reason=f"PB SHORT | EMA21 wick {wick_pct:.0%} ADX {adx:.0f} + supply",
+                )
 
-        # Layer 2: EMA50 touch + 40% wick rejection
-        if ema_s > 0 and high >= ema_s * 0.998 and close < ema_s and wick_pct >= 0.4:
-            entry = ema_s
-            sl = ema_s + 1.5 * atr
-            tp = entry - 2.0 * (sl - entry)
-            return Signal(
-                type=SignalType.SHORT, source=SignalSource.MAIN,
-                regime=Regime.TRENDING, entry_price=entry,
-                sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-                reason=f"PB SHORT | EMA50 wick {wick_pct:.0%} ADX {adx:.0f}",
-            )
+            # Layer 2: EMA50 touch + 40% wick rejection
+            if ema_s > 0 and high >= ema_s * 0.998 and close < ema_s and wick_pct >= 0.4:
+                entry = ema_s
+                sl = ema_s + 1.5 * atr
+                tp = entry - 2.0 * (sl - entry)
+                return Signal(
+                    type=SignalType.SHORT, source=SignalSource.MAIN,
+                    regime=Regime.TRENDING, entry_price=entry,
+                    sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
+                    reason=f"PB SHORT | EMA50 wick {wick_pct:.0%} ADX {adx:.0f} + supply",
+                )
 
         # Log why pullback didn't trigger
         reasons = []
