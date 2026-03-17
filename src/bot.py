@@ -30,6 +30,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger("futu.bot")
 
+# Strategy reject reasons → separate debug log file
+_strategy_logger = logging.getLogger("futu.strategy")
+_reject_handler = logging.FileHandler("logs/rejects.log", encoding="utf-8")
+_reject_handler.setLevel(logging.DEBUG)
+_reject_handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s", "%Y-%m-%d %H:%M:%S"))
+_strategy_logger.addHandler(_reject_handler)
+_strategy_logger.setLevel(logging.DEBUG)
+
 
 @dataclass
 class SymbolState:
@@ -435,10 +443,11 @@ class FutuBot:
                 df = compute_all(candles, self.config.indicators)
 
                 # Pullback only — no breakout (breakout = chasing price)
-                pb_signal = scan_trending_pullback(df, self.config.trending, state.bias)
+                pb_signal = scan_trending_pullback(df, self.config.trending, state.bias, symbol=sym.split("/")[0])
                 if pb_signal and pb_signal.type != SignalType.NONE:
                     rr_ok, rr = self.risk.check_rr(pb_signal)
                     if not rr_ok:
+                        logger.info("PB R:R REJECT %s: %.2f < min", sym.split("/")[0], rr)
                         continue
                     pb_signal.reason = f"[{sym.split('/')[0]}] {pb_signal.reason}"
                     logger.info("PULLBACK SIGNAL: %s | R:R %.2f", pb_signal.reason, rr)
@@ -481,11 +490,12 @@ class FutuBot:
                     continue
 
                 df = compute_all(candles, self.config.indicators)
-                signal = scan_trending_pullback(df, self.config.trending, state.bias)
+                signal = scan_trending_pullback(df, self.config.trending, state.bias, symbol=sym.split("/")[0])
 
                 if signal and signal.type != SignalType.NONE:
                     rr_ok, rr = self.risk.check_rr(signal)
                     if not rr_ok:
+                        logger.info("PB30 R:R REJECT %s: %.2f < min", sym.split("/")[0], rr)
                         continue
                     signal.reason = f"[{sym.split('/')[0]}] {signal.reason}"
                     logger.info("PB30 SIGNAL: %s | R:R %.2f", signal.reason, rr)
@@ -555,11 +565,12 @@ class FutuBot:
             return None
 
         df = compute_all(candles, self.config.indicators)
-        signal = scan_main(df, self.config.strategy, bias)
+        signal = scan_main(df, self.config.strategy, bias, symbol=symbol.split("/")[0])
 
         if signal:
             rr_ok, rr = self.risk.check_rr(signal)
             if not rr_ok:
+                logger.info("R:R REJECT %s: %.2f < min", symbol.split("/")[0], rr)
                 return None
             signal.reason = f"[{symbol.split('/')[0]}] {signal.reason}"
             logger.info("SIGNAL: %s | R:R %.2f", signal.reason, rr)
@@ -719,6 +730,8 @@ class FutuBot:
         try:
             position = await self.exchange.get_position()
             if position is None:
+                # Cancel remaining algo orders to prevent ghost positions
+                await self.exchange._cancel_algo_orders()
                 real_pnl = await self.exchange.get_closed_pnl(symbol)
                 # Clear both flags — only one exchange position per symbol
                 state.has_position = False

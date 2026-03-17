@@ -67,14 +67,74 @@ def detect_regime(df: pd.DataFrame, cfg: StrategyConfig) -> Regime:
     return Regime.RANGING
 
 
+# ── DEMAND / SUPPLY ZONES ────────────────────────────────────────────
+
+def find_demand_zones(df: pd.DataFrame, lookback: int = 50, strength: int = 3) -> list[tuple[float, float]]:
+    """Find demand zones from recent swing lows.
+    Returns list of (zone_low, zone_high) tuples.
+    """
+    zones = []
+    end = len(df) - 1
+    start = max(0, end - lookback)
+    for i in range(start + strength, end - strength):
+        low_i = df.iloc[i]["low"]
+        is_swing = all(
+            low_i <= df.iloc[i - j]["low"] for j in range(1, strength + 1)
+        ) and all(
+            low_i <= df.iloc[i + j]["low"] for j in range(1, strength + 1)
+        )
+        if is_swing:
+            body_low = min(df.iloc[i]["open"], df.iloc[i]["close"])
+            zones.append((low_i, body_low))
+    return zones
+
+
+def find_supply_zones(df: pd.DataFrame, lookback: int = 50, strength: int = 3) -> list[tuple[float, float]]:
+    """Find supply zones from recent swing highs.
+    Returns list of (zone_low, zone_high) tuples.
+    """
+    zones = []
+    end = len(df) - 1
+    start = max(0, end - lookback)
+    for i in range(start + strength, end - strength):
+        high_i = df.iloc[i]["high"]
+        is_swing = all(
+            high_i >= df.iloc[i - j]["high"] for j in range(1, strength + 1)
+        ) and all(
+            high_i >= df.iloc[i + j]["high"] for j in range(1, strength + 1)
+        )
+        if is_swing:
+            body_high = max(df.iloc[i]["open"], df.iloc[i]["close"])
+            zones.append((body_high, high_i))
+    return zones
+
+
+def in_demand_zone(price: float, zones: list[tuple[float, float]], tolerance: float = 0.002) -> bool:
+    """Check if price is within any demand zone (with small tolerance)."""
+    for zone_low, zone_high in zones:
+        margin = (zone_high - zone_low) * tolerance / 0.002 if zone_high > zone_low else zone_low * tolerance
+        if zone_low - margin <= price <= zone_high + margin:
+            return True
+    return False
+
+
+def in_supply_zone(price: float, zones: list[tuple[float, float]], tolerance: float = 0.002) -> bool:
+    """Check if price is within any supply zone (with small tolerance)."""
+    for zone_low, zone_high in zones:
+        margin = (zone_high - zone_low) * tolerance / 0.002 if zone_high > zone_low else zone_high * tolerance
+        if zone_low - margin <= price <= zone_high + margin:
+            return True
+    return False
+
+
 # ── RANGING MODE (mean reversion, filtered by HTF) ──────────────────
 
-def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias) -> Signal | None:
-    if bias == HTFBias.BEARISH:
-        return None  # Don't buy against H4 downtrend
-
+def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, symbol: str = "") -> Signal | None:
     row = df.iloc[-1]
     close = row["close"]
+    opn = row["open"]
+    low = row["low"]
+    high = row["high"]
     rsi = row["rsi"]
     bb_lower = row["bb_lower"]
     bb_mid = row["bb_mid"]
@@ -82,16 +142,43 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias) -> 
     vol_sma = row["volume_sma"]
     atr = row["atr"]
 
-    touch_lower = close <= bb_lower * (1 + cfg.bb_touch_pct / 100)
+    # Wick touches BB lower, close inside BB, lower wick > 10%
+    candle_range = high - low
+    lower_wick = min(close, opn) - low
+    wick_pct = lower_wick / candle_range if candle_range > 0 else 0
+    touch_lower = low <= bb_lower * (1 + cfg.bb_touch_pct / 100)
+    close_inside = close > bb_lower
+    wick_ok = wick_pct >= 0.1
+
     rsi_oversold = rsi < cfg.rsi_oversold
     volume_ok = volume > vol_sma * cfg.volume_range_mult
 
-    if not (touch_lower and rsi_oversold and volume_ok):
+    if not (touch_lower and close_inside and wick_ok and rsi_oversold and volume_ok):
+        reasons = []
+        if not touch_lower:
+            dist = (low - bb_lower) / bb_lower * 100
+            reasons.append(f"BB {dist:.1f}% away")
+        if touch_lower and not close_inside:
+            reasons.append("close below BB")
+        if touch_lower and not wick_ok:
+            reasons.append(f"wick {wick_pct:.0%} < 10%")
+        if not rsi_oversold:
+            reasons.append(f"RSI {rsi:.0f} > {cfg.rsi_oversold}")
+        if not volume_ok:
+            ratio = volume / vol_sma if vol_sma > 0 else 0
+            reasons.append(f"vol {ratio:.1f}x < {cfg.volume_range_mult}x")
+        logger.debug("SKIP LONG %s: %s", symbol, " | ".join(reasons))
+        return None
+
+    # Demand zone filter — price must be at a previous swing low area
+    demand_zones = find_demand_zones(df)
+    if not in_demand_zone(low, demand_zones):
+        logger.debug("SKIP LONG %s: no demand zone near %.2f", symbol, low)
         return None
 
     entry = close
     sl = entry - cfg.main_sl_ranging_atr_mult * atr
-    tp1 = entry + (bb_mid - entry) * 0.85  # 85% distance to BB mid
+    tp1 = entry + (bb_mid - entry) * 0.50  # 50% distance to BB mid — hit faster
 
     return Signal(
         type=SignalType.LONG,
@@ -102,34 +189,60 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias) -> 
         tp1_price=tp1,
         tp2_price=None,
         atr=atr,
-        reason=f"RANGE LONG | BB + RSI {rsi:.0f} + H4 {bias.value}",
+        reason=f"RANGE LONG | BB wick {wick_pct:.0%} + RSI {rsi:.0f} + demand",
     )
 
 
-def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias) -> Signal | None:
-    if bias == HTFBias.BULLISH:
-        return None  # Don't short against H4 uptrend
-
+def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, symbol: str = "") -> Signal | None:
     row = df.iloc[-1]
     close = row["close"]
+    opn = row["open"]
+    low = row["low"]
+    high = row["high"]
     rsi = row["rsi"]
     bb_upper = row["bb_upper"]
     bb_mid = row["bb_mid"]
     volume = row["volume"]
     vol_sma = row["volume_sma"]
     atr = row["atr"]
-    bearish_candle = close < row["open"]
 
-    touch_upper = close >= bb_upper * (1 - cfg.bb_touch_pct / 100)
+    # Wick touches BB upper, close inside BB, upper wick > 10%
+    candle_range = high - low
+    upper_wick = high - max(close, opn)
+    wick_pct = upper_wick / candle_range if candle_range > 0 else 0
+    touch_upper = high >= bb_upper * (1 - cfg.bb_touch_pct / 100)
+    close_inside = close < bb_upper
+    wick_ok = wick_pct >= 0.1
+
     rsi_overbought = rsi > cfg.rsi_overbought
     volume_ok = volume > vol_sma * cfg.volume_range_mult
 
-    if not (touch_upper and rsi_overbought and volume_ok):
+    if not (touch_upper and close_inside and wick_ok and rsi_overbought and volume_ok):
+        reasons = []
+        if not touch_upper:
+            dist = (bb_upper - high) / bb_upper * 100
+            reasons.append(f"BB {dist:.1f}% away")
+        if touch_upper and not close_inside:
+            reasons.append("close above BB")
+        if touch_upper and not wick_ok:
+            reasons.append(f"wick {wick_pct:.0%} < 10%")
+        if not rsi_overbought:
+            reasons.append(f"RSI {rsi:.0f} < {cfg.rsi_overbought}")
+        if not volume_ok:
+            ratio = volume / vol_sma if vol_sma > 0 else 0
+            reasons.append(f"vol {ratio:.1f}x < {cfg.volume_range_mult}x")
+        logger.debug("SKIP SHORT %s: %s", symbol, " | ".join(reasons))
+        return None
+
+    # Supply zone filter — price must be at a previous swing high area
+    supply_zones = find_supply_zones(df)
+    if not in_supply_zone(high, supply_zones):
+        logger.debug("SKIP SHORT %s: no supply zone near %.2f", symbol, high)
         return None
 
     entry = close
     sl = entry + cfg.main_sl_ranging_atr_mult * atr
-    tp1 = entry - (entry - bb_mid) * 0.85  # 85% distance to BB mid
+    tp1 = entry - (entry - bb_mid) * 0.50  # 50% distance to BB mid — hit faster
 
     return Signal(
         type=SignalType.SHORT,
@@ -140,7 +253,7 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias) ->
         tp1_price=tp1,
         tp2_price=None,
         atr=atr,
-        reason=f"RANGE SHORT | BB + RSI {rsi:.0f} + H4 {bias.value}",
+        reason=f"RANGE SHORT | BB wick {wick_pct:.0%} + RSI {rsi:.0f} + supply",
     )
 
 
@@ -229,7 +342,7 @@ def scan_trending_1h(df_1h: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias) ->
 
 # ── TRENDING PULLBACK (EMA bounce in trend) ──────────────────────
 
-def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias) -> Signal | None:
+def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias, symbol: str = "") -> Signal | None:
     """Two-layer pullback entry:
     Layer 1: EMA21 touch + 40% wick rejection → entry at EMA21
     Layer 2: If EMA21 no wick → wait for EMA50 touch + any wick → entry at EMA50
@@ -253,6 +366,7 @@ def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias)
     ema_s = row.get("ema_50") or 0
 
     if atr <= 0 or adx < cfg.adx_min:
+        logger.debug("SKIP PB %s: ADX %.0f < %s", symbol, adx, cfg.adx_min)
         return None
 
     candle_range = high - low
@@ -260,15 +374,19 @@ def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias)
         return None
 
     # ── LONG ──
-    if (bias in (HTFBias.BULLISH, HTFBias.NEUTRAL)
-            and plus_di > minus_di
-            and ema_f > ema_m
-            and close > opn
-            and 40 < rsi < 70):
+    long_bias_ok = bias in (HTFBias.BULLISH, HTFBias.NEUTRAL)
+    long_di_ok = plus_di > minus_di
+    long_ema_ok = ema_f > ema_m
+    long_candle_ok = close > opn
+    long_rsi_ok = 40 < rsi < 70
 
+    if long_bias_ok and long_di_ok and long_ema_ok and long_candle_ok and long_rsi_ok:
         # Wick ratio for long: lower wick / total range
         lower_wick = min(close, opn) - low
         wick_pct = lower_wick / candle_range
+
+        ema21_dist = (low - ema_m) / ema_m * 100 if ema_m > 0 else 99
+        ema50_dist = (low - ema_s) / ema_s * 100 if ema_s > 0 else 99
 
         # Layer 1: EMA21 touch + 40% wick rejection
         if low <= ema_m * 1.002 and close > ema_m and wick_pct >= 0.4:
@@ -294,16 +412,47 @@ def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias)
                 reason=f"PB LONG | EMA50 wick {wick_pct:.0%} ADX {adx:.0f}",
             )
 
-    # ── SHORT ──
-    if (bias in (HTFBias.BEARISH, HTFBias.NEUTRAL)
-            and minus_di > plus_di
-            and ema_f < ema_m
-            and close < opn
-            and 30 < rsi < 60):
+        # Log why pullback didn't trigger
+        reasons = []
+        if ema21_dist > 0.2:
+            reasons.append(f"EMA21 {ema21_dist:.1f}% away")
+        elif wick_pct < 0.4:
+            reasons.append(f"EMA21 touch but wick {wick_pct:.0%} < 40%")
+        if ema50_dist > 0.2:
+            reasons.append(f"EMA50 {ema50_dist:.1f}% away")
+        elif wick_pct < 0.4:
+            reasons.append(f"EMA50 touch but wick {wick_pct:.0%} < 40%")
+        logger.debug("SKIP PB LONG %s: %s", symbol, " | ".join(reasons))
 
+    elif adx >= cfg.adx_min:
+        # Log which trending precondition failed
+        reasons = []
+        if not long_bias_ok:
+            reasons.append(f"bias={bias.value}")
+        if not long_di_ok:
+            reasons.append(f"+DI {plus_di:.0f} <= -DI {minus_di:.0f}")
+        if not long_ema_ok:
+            reasons.append(f"EMA9 < EMA21")
+        if not long_candle_ok:
+            reasons.append("bearish candle")
+        if not long_rsi_ok:
+            reasons.append(f"RSI {rsi:.0f} out 40-70")
+        logger.debug("SKIP PB LONG %s: %s", symbol, " | ".join(reasons))
+
+    # ── SHORT ──
+    short_bias_ok = bias in (HTFBias.BEARISH, HTFBias.NEUTRAL)
+    short_di_ok = minus_di > plus_di
+    short_ema_ok = ema_f < ema_m
+    short_candle_ok = close < opn
+    short_rsi_ok = 30 < rsi < 60
+
+    if short_bias_ok and short_di_ok and short_ema_ok and short_candle_ok and short_rsi_ok:
         # Wick ratio for short: upper wick / total range
         upper_wick = high - max(close, opn)
         wick_pct = upper_wick / candle_range
+
+        ema21_dist = (ema_m - high) / ema_m * 100 if ema_m > 0 else 99
+        ema50_dist = (ema_s - high) / ema_s * 100 if ema_s > 0 else 99
 
         # Layer 1: EMA21 touch + 40% wick rejection
         if high >= ema_m * 0.998 and close < ema_m and wick_pct >= 0.4:
@@ -328,6 +477,32 @@ def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias)
                 sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
                 reason=f"PB SHORT | EMA50 wick {wick_pct:.0%} ADX {adx:.0f}",
             )
+
+        # Log why pullback didn't trigger
+        reasons = []
+        if ema21_dist > 0.2:
+            reasons.append(f"EMA21 {ema21_dist:.1f}% away")
+        elif wick_pct < 0.4:
+            reasons.append(f"EMA21 touch but wick {wick_pct:.0%} < 40%")
+        if ema50_dist > 0.2:
+            reasons.append(f"EMA50 {ema50_dist:.1f}% away")
+        elif wick_pct < 0.4:
+            reasons.append(f"EMA50 touch but wick {wick_pct:.0%} < 40%")
+        logger.debug("SKIP PB SHORT %s: %s", symbol, " | ".join(reasons))
+
+    elif adx >= cfg.adx_min and not long_bias_ok:
+        reasons = []
+        if not short_bias_ok:
+            reasons.append(f"bias={bias.value}")
+        if not short_di_ok:
+            reasons.append(f"-DI {minus_di:.0f} <= +DI {plus_di:.0f}")
+        if not short_ema_ok:
+            reasons.append(f"EMA9 > EMA21")
+        if not short_candle_ok:
+            reasons.append("bullish candle")
+        if not short_rsi_ok:
+            reasons.append(f"RSI {rsi:.0f} out 30-60")
+        logger.debug("SKIP PB SHORT %s: %s", symbol, " | ".join(reasons))
 
     return None
 
@@ -384,22 +559,18 @@ def check_alert_signal(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias) -> 
 
 # ── MAIN SCANNERS ────────────────────────────────────────────────────
 
-def scan_main(df_15m: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias = HTFBias.NEUTRAL) -> Signal | None:
-    """Scan 15m for ranging signals only. Trending is handled separately on 1H."""
+def scan_main(df_15m: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias = HTFBias.NEUTRAL, symbol: str = "") -> Signal | None:
+    """Scan 15m for ranging signals — BB mean reversion works in any regime."""
     regime = detect_regime(df_15m, cfg)
     logger.info(
         "Regime: %s | HTF: %s | ADX: %.1f",
         regime.value, bias.value, df_15m.iloc[-1].get("adx", 0),
     )
 
-    # Only check ranging on 15m (ADX < 25)
-    if regime != Regime.RANGING:
-        return None
-
-    signal = check_ranging_long(df_15m, cfg, bias)
+    signal = check_ranging_long(df_15m, cfg, bias, symbol)
     if signal:
         return signal
-    return check_ranging_short(df_15m, cfg, bias)
+    return check_ranging_short(df_15m, cfg, bias, symbol)
 
 
 def confirm_on_5m(df_5m: pd.DataFrame, signal: Signal) -> bool:

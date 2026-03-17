@@ -110,6 +110,10 @@ class Exchange:
         sym = symbol or self.config.symbol
         await self.rate_limiter.acquire("fetch_ohlcv")
         ohlcv = await retry_api_call(self.exchange.fetch_ohlcv, sym, timeframe, limit=limit)
+        # Last candle is still open — use prev candle's volume (current volume incomplete)
+        if len(ohlcv) >= 2:
+            ohlcv[-1] = list(ohlcv[-1])
+            ohlcv[-1][5] = ohlcv[-2][5]  # volume from previous closed candle
         return [
             {
                 "timestamp": c[0],

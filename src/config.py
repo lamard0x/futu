@@ -47,8 +47,8 @@ class StrategyConfig:
     volume_trend_mult: float = 1.0
 
     # Ranging mode entry — optimized via backtest (set C)
-    rsi_oversold: float = 35.0
-    rsi_overbought: float = 65.0
+    rsi_oversold: float = 42.0
+    rsi_overbought: float = 58.0
     bb_touch_pct: float = 0.8
     volume_range_mult: float = 0.6
 
@@ -65,7 +65,7 @@ class StrategyConfig:
     main_tp1_atr_mult: float = 1.5
     main_tp2_atr_mult: float = 2.5
     main_sl_trending_atr_mult: float = 1.5
-    main_sl_ranging_atr_mult: float = 1.0
+    main_sl_ranging_atr_mult: float = 0.5
     partial_close_pct: float = 0.5
 
     # Ranging time exit

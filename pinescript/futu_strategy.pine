@@ -1,5 +1,5 @@
 //@version=5
-indicator("FUTU Scalper v1", overlay=true, max_lines_count=500, max_labels_count=500)
+indicator("FUTU Scalper v1", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
 
 // ── Inputs ──
 ema_fast_len  = input.int(9, "EMA Fast")
@@ -25,6 +25,11 @@ tp1_atr_mult  = input.float(1.5, "TP1 ATR Mult")
 tp2_atr_mult  = input.float(2.5, "TP2 ATR Mult")
 sl_trend_mult = input.float(1.5, "SL Trending ATR Mult")
 sl_range_mult = input.float(1.0, "SL Ranging ATR Mult")
+
+// Demand/Supply zone inputs
+zone_lookback  = input.int(50, "Zone Lookback", minval=10)
+zone_strength  = input.int(3, "Zone Swing Strength", minval=1, maxval=10)
+show_zones     = input.bool(true, "Show Demand/Supply Zones")
 
 show_signals  = input.bool(true, "Show Entry Signals")
 show_tp_sl    = input.bool(true, "Show TP/SL Levels")
@@ -85,41 +90,138 @@ htf_adx   = request.security(syminfo.tickerid, "240", ta.dmi(adx_period, adx_per
 htf_bullish = htf_ema9 > htf_ema21 and htf_ema21 > htf_ema50 and htf_adx > 20
 htf_bearish = htf_ema9 < htf_ema21 and htf_ema21 < htf_ema50 and htf_adx > 20
 
-// ── Candle Body Ratio ──
+// ── Candle metrics ──
 body = math.abs(close - open)
 range_hl = high - low
 body_ratio = range_hl > 0 ? body / range_hl : 0
+lower_wick = math.min(close, open) - low
+upper_wick = high - math.max(close, open)
+lower_wick_pct = range_hl > 0 ? lower_wick / range_hl : 0
+upper_wick_pct = range_hl > 0 ? upper_wick / range_hl : 0
 
-// ── Trending Entry Conditions ──
-near_ema9 = math.abs(close - ema9) / close < 0.005
-pullback_to_ema = close > ema9 and low <= ema9 * 1.005
+// ── Demand / Supply Zone Detection ──
+// Swing low = low is lowest within `strength` bars on each side
+is_swing_low(idx, str) =>
+    result = true
+    for j = 1 to str
+        if low[idx] > low[idx - j] or low[idx] > low[idx + j]
+            result := false
+            break
+    result
 
-trend_long = is_trending and htf_bullish and ema9 > ema21 and ema21 > ema50 and rsi_val > 50 and (near_ema9 or pullback_to_ema) and volume > vol_sma * vol_trend_mult and body_ratio > 0.3
+is_swing_high(idx, str) =>
+    result = true
+    for j = 1 to str
+        if high[idx] < high[idx - j] or high[idx] < high[idx + j]
+            result := false
+            break
+    result
 
-near_ema9_short = math.abs(close - ema9) / close < 0.005
-pullback_short = close < ema9 and high >= ema9 * 0.995
+// Find nearest demand zone (swing low body range)
+var float demand_low = na
+var float demand_high = na
+var int demand_bar = na
+var float supply_low = na
+var float supply_high = na
+var int supply_bar = na
 
-trend_short = is_trending and htf_bearish and ema9 < ema21 and ema21 < ema50 and rsi_val < 50 and (near_ema9_short or pullback_short) and volume > vol_sma * vol_trend_mult and body_ratio > 0.3
+// Scan for most recent swing low/high within lookback
+find_demand() =>
+    d_low = float(na)
+    d_high = float(na)
+    d_bar = int(na)
+    for i = zone_strength to zone_lookback
+        if is_swing_low(i, zone_strength)
+            d_low := low[i]
+            d_high := math.min(open[i], close[i])
+            d_bar := bar_index - i
+            break
+    [d_low, d_high, d_bar]
 
-// ── Ranging Entry Conditions ──
-bb_range_pct = bb_upper - bb_lower > 0 ? (close - bb_lower) / (bb_upper - bb_lower) : 0.5
+find_supply() =>
+    s_low = float(na)
+    s_high = float(na)
+    s_bar = int(na)
+    for i = zone_strength to zone_lookback
+        if is_swing_high(i, zone_strength)
+            s_low := math.max(open[i], close[i])
+            s_high := high[i]
+            s_bar := bar_index - i
+            break
+    [s_low, s_high, s_bar]
 
-range_long = is_ranging and not htf_bearish and rsi_val < rsi_oversold and bb_range_pct < bb_touch_pct and volume > vol_sma * vol_range_mult
+[d_lo, d_hi, d_bi] = find_demand()
+[s_lo, s_hi, s_bi] = find_supply()
+demand_low := d_lo
+demand_high := d_hi
+demand_bar := d_bi
+supply_low := s_lo
+supply_high := s_hi
+supply_bar := s_bi
 
-range_short = is_ranging and not htf_bullish and rsi_val > rsi_overbought and bb_range_pct > (1 - bb_touch_pct) and volume > vol_sma * vol_range_mult
+// Check if price is in zone (with small tolerance)
+in_demand = not na(demand_low) and not na(demand_high) and low <= demand_high * 1.002 and low >= demand_low * 0.998
+in_supply = not na(supply_low) and not na(supply_high) and high >= supply_low * 0.998 and high <= supply_high * 1.002
+
+// ── Draw Demand/Supply Zones ──
+var box demand_box = na
+var box supply_box = na
+
+if show_zones and barstate.islast
+    // Delete old boxes
+    if not na(demand_box)
+        box.delete(demand_box)
+    if not na(supply_box)
+        box.delete(supply_box)
+
+    // Draw demand zone (green)
+    if not na(demand_low) and not na(demand_bar)
+        demand_box := box.new(demand_bar, demand_high, bar_index + 10, demand_low,
+             border_color=color.new(#00ff88, 60), bgcolor=color.new(#00ff88, 88),
+             border_width=1, border_style=line.style_dashed)
+
+    // Draw supply zone (red)
+    if not na(supply_low) and not na(supply_bar)
+        supply_box := box.new(supply_bar, supply_high, bar_index + 10, supply_low,
+             border_color=color.new(#ff4466, 60), bgcolor=color.new(#ff4466, 88),
+             border_width=1, border_style=line.style_dashed)
+
+// ── Trending Pullback Conditions (EMA bounce) ──
+// Long: bullish candle + wick bounce at EMA21/50
+pb_long_ema21 = is_trending and di_plus > di_minus and ema9 > ema21 and close > open and 40 < rsi_val and rsi_val < 70 and low <= ema21 * 1.002 and close > ema21 and lower_wick_pct >= 0.4
+pb_long_ema50 = is_trending and di_plus > di_minus and ema9 > ema21 and close > open and 40 < rsi_val and rsi_val < 70 and low <= ema50 * 1.002 and close > ema50 and lower_wick_pct >= 0.4
+
+// Short: bearish candle + wick rejection at EMA21/50
+pb_short_ema21 = is_trending and di_minus > di_plus and ema9 < ema21 and close < open and 30 < rsi_val and rsi_val < 60 and high >= ema21 * 0.998 and close < ema21 and upper_wick_pct >= 0.4
+pb_short_ema50 = is_trending and di_minus > di_plus and ema9 < ema21 and close < open and 30 < rsi_val and rsi_val < 60 and high >= ema50 * 0.998 and close < ema50 and upper_wick_pct >= 0.4
+
+trend_long = (pb_long_ema21 or pb_long_ema50) and (htf_bullish or (not htf_bullish and not htf_bearish))
+trend_short = (pb_short_ema21 or pb_short_ema50) and (htf_bearish or (not htf_bullish and not htf_bearish))
+
+// ── Ranging Entry Conditions (BB + wick + demand/supply) ──
+// Long: wick touches BB lower, close inside BB, wick >= 10%, RSI oversold, volume OK, in demand zone
+bb_touch_lower = low <= bb_lower * (1 + bb_touch_pct / 100)
+bb_close_inside_lower = close > bb_lower
+
+range_long = bb_touch_lower and bb_close_inside_lower and lower_wick_pct >= 0.1 and rsi_val < rsi_oversold and volume > vol_sma * vol_range_mult and in_demand
+
+// Short: wick touches BB upper, close inside BB, wick >= 10%, RSI overbought, volume OK, in supply zone
+bb_touch_upper = high >= bb_upper * (1 - bb_touch_pct / 100)
+bb_close_inside_upper = close < bb_upper
+
+range_short = bb_touch_upper and bb_close_inside_upper and upper_wick_pct >= 0.1 and rsi_val > rsi_overbought and volume > vol_sma * vol_range_mult and in_supply
 
 // ── Combined Signals ──
 long_signal  = (trend_long or range_long) and show_signals
 short_signal = (trend_short or range_short) and show_signals
 
 // ── TP/SL Calculations ──
-sl_mult = is_trending ? sl_trend_mult : sl_range_mult
-long_sl  = close - atr_val * sl_mult
-long_tp1 = close + atr_val * tp1_atr_mult
-long_tp2 = close + atr_val * tp2_atr_mult
-short_sl  = close + atr_val * sl_mult
-short_tp1 = close - atr_val * tp1_atr_mult
-short_tp2 = close - atr_val * tp2_atr_mult
+// Ranging: TP = 85% to BB mid, SL = 1 ATR
+// Trending: TP = 2x risk, SL = 1.5 ATR from EMA
+long_sl  = close - atr_val * (is_trending ? sl_trend_mult : sl_range_mult)
+long_tp1 = range_long ? close + (bb_basis - close) * 0.50 : close + 2.0 * (close - long_sl)
+short_sl  = close + atr_val * (is_trending ? sl_trend_mult : sl_range_mult)
+short_tp1 = range_short ? close - (close - bb_basis) * 0.50 : close - 2.0 * (short_sl - close)
 
 // ── Plot Signals ──
 plotshape(long_signal,  "Long",  shape.triangleup,   location.belowbar, color.new(#00ff88, 0), size=size.small)
@@ -127,13 +229,13 @@ plotshape(short_signal, "Short", shape.triangledown, location.abovebar, color.ne
 
 // ── TP/SL Lines ──
 if long_signal and show_tp_sl
-    label.new(bar_index, long_tp1, "TP1", color=color.new(#00ff00, 70), textcolor=color.white, size=size.tiny, style=label.style_label_down)
+    label.new(bar_index, long_tp1, "TP", color=color.new(#00ff00, 70), textcolor=color.white, size=size.tiny, style=label.style_label_down)
     label.new(bar_index, long_sl, "SL", color=color.new(#ff0000, 70), textcolor=color.white, size=size.tiny, style=label.style_label_up)
     line.new(bar_index, long_tp1, bar_index + 5, long_tp1, color=color.new(#00ff00, 50), style=line.style_dashed)
     line.new(bar_index, long_sl, bar_index + 5, long_sl, color=color.new(#ff0000, 50), style=line.style_dashed)
 
 if short_signal and show_tp_sl
-    label.new(bar_index, short_tp1, "TP1", color=color.new(#00ff00, 70), textcolor=color.white, size=size.tiny, style=label.style_label_up)
+    label.new(bar_index, short_tp1, "TP", color=color.new(#00ff00, 70), textcolor=color.white, size=size.tiny, style=label.style_label_up)
     label.new(bar_index, short_sl, "SL", color=color.new(#ff0000, 70), textcolor=color.white, size=size.tiny, style=label.style_label_down)
     line.new(bar_index, short_tp1, bar_index + 5, short_tp1, color=color.new(#00ff00, 50), style=line.style_dashed)
     line.new(bar_index, short_sl, bar_index + 5, short_sl, color=color.new(#ff0000, 50), style=line.style_dashed)
@@ -147,24 +249,30 @@ htf_color = htf_bullish ? color.new(#00ff88, 80) : htf_bearish ? color.new(#ff44
 bgcolor(htf_color, title="HTF Bias")
 
 // ── Info Table ──
-var table info = table.new(position.top_right, 2, 6, bgcolor=color.new(#1a1a2e, 20), border_width=1)
+var table info = table.new(position.top_right, 2, 8, bgcolor=color.new(#1a1a2e, 20), border_width=1)
 
 if barstate.islast
-    regime_text = is_trending ? "TRENDING" : "RANGING"
-    bias_text = htf_bullish ? "BULLISH" : htf_bearish ? "BEARISH" : "NEUTRAL"
+    regime_text = is_trending ? "TREND" : "RANGE"
+    bias_text = htf_bullish ? "BULL" : htf_bearish ? "BEAR" : "NEUTRAL"
 
     table.cell(info, 0, 0, "Regime", text_color=color.gray, text_size=size.small)
     table.cell(info, 1, 0, regime_text, text_color=is_trending ? #2196f3 : #ff9800, text_size=size.small)
-    table.cell(info, 0, 1, "HTF Bias", text_color=color.gray, text_size=size.small)
+    table.cell(info, 0, 1, "H4 Bias", text_color=color.gray, text_size=size.small)
     table.cell(info, 1, 1, bias_text, text_color=htf_bullish ? #00ff88 : htf_bearish ? #ff4466 : color.gray, text_size=size.small)
     table.cell(info, 0, 2, "ADX", text_color=color.gray, text_size=size.small)
     table.cell(info, 1, 2, str.tostring(adx_val, "#.0"), text_color=color.white, text_size=size.small)
     table.cell(info, 0, 3, "RSI", text_color=color.gray, text_size=size.small)
     table.cell(info, 1, 3, str.tostring(rsi_val, "#.0"), text_color=rsi_val > 60 ? #ff4466 : rsi_val < 40 ? #00ff88 : color.white, text_size=size.small)
-    table.cell(info, 0, 4, "ATR", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 4, str.tostring(atr_val, "#.1"), text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 5, "Vol/SMA", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 5, str.tostring(volume / vol_sma, "#.2") + "x", text_color=volume > vol_sma ? #00ff88 : #ff4466, text_size=size.small)
+    table.cell(info, 0, 4, "+DI/-DI", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 4, str.tostring(di_plus, "#.0") + "/" + str.tostring(di_minus, "#.0"), text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 5, "ATR", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 5, str.tostring(atr_val, "#.1"), text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 6, "Vol", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 6, str.tostring(volume / vol_sma, "#.1") + "x", text_color=volume > vol_sma ? #00ff88 : #ff4466, text_size=size.small)
+    table.cell(info, 0, 7, "D/S Zone", text_color=color.gray, text_size=size.small)
+    zone_text = in_demand ? "DEMAND" : in_supply ? "SUPPLY" : "-"
+    zone_clr = in_demand ? #00ff88 : in_supply ? #ff4466 : color.gray
+    table.cell(info, 1, 7, zone_text, text_color=zone_clr, text_size=size.small)
 
 // ── Alerts ──
 alertcondition(long_signal,  "FUTU Long Signal",  "FUTU: LONG entry signal")
