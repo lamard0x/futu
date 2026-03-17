@@ -783,7 +783,7 @@ class FutuBot:
                 if position["side"] == "long":
                     tp_dist = tp - entry
                     mid_point = entry + tp_dist * 0.5
-                    if tp_dist > 0 and mark >= mid_point:
+                    if tp_dist > 0 and mark >= mid_point and mark > entry:
                         logger.info(
                             "%s %s SL → breakeven (mark %g >= 50%% target %g)",
                             symbol.split("/")[0], regime, mark, mid_point,
@@ -793,7 +793,7 @@ class FutuBot:
                 elif position["side"] == "short":
                     tp_dist = entry - tp
                     mid_point = entry - tp_dist * 0.5
-                    if tp_dist > 0 and mark <= mid_point:
+                    if tp_dist > 0 and mark <= mid_point and mark < entry:
                         logger.info(
                             "%s %s SL → breakeven (mark %g <= 50%% target %g)",
                             symbol.split("/")[0], regime, mark, mid_point,
