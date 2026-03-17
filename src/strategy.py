@@ -148,7 +148,7 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
     wick_pct = lower_wick / candle_range if candle_range > 0 else 0
     touch_lower = low <= bb_lower * (1 + cfg.bb_touch_pct / 100)
     close_inside = close > bb_lower
-    wick_ok = wick_pct >= 0.25
+    wick_ok = wick_pct >= 0.15
     bullish = close > opn
 
     rsi_oversold = rsi < cfg.rsi_oversold
@@ -218,7 +218,7 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
     wick_pct = upper_wick / candle_range if candle_range > 0 else 0
     touch_upper = high >= bb_upper * (1 - cfg.bb_touch_pct / 100)
     close_inside = close < bb_upper
-    wick_ok = wick_pct >= 0.25
+    wick_ok = wick_pct >= 0.15
     bearish = close < opn
 
     rsi_overbought = rsi > cfg.rsi_overbought

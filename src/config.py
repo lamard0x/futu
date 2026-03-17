@@ -50,7 +50,7 @@ class StrategyConfig:
     rsi_oversold: float = 42.0
     rsi_overbought: float = 58.0
     bb_touch_pct: float = 0.8
-    volume_range_mult: float = 0.6
+    volume_range_mult: float = 0.4
 
     # Candle strength filter
     min_body_ratio: float = 0.3

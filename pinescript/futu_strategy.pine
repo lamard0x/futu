@@ -85,7 +85,8 @@ is_ranging  = not is_trending
 htf_ema9  = request.security(syminfo.tickerid, "240", ta.ema(close, ema_fast_len))
 htf_ema21 = request.security(syminfo.tickerid, "240", ta.ema(close, ema_mid_len))
 htf_ema50 = request.security(syminfo.tickerid, "240", ta.ema(close, ema_slow_len))
-htf_adx   = request.security(syminfo.tickerid, "240", ta.dmi(adx_period, adx_period)[2])
+[_, __, htf_adx_raw] = ta.dmi(adx_period, adx_period)
+htf_adx   = request.security(syminfo.tickerid, "240", htf_adx_raw)
 
 htf_bullish = htf_ema9 > htf_ema21 and htf_ema21 > htf_ema50 and htf_adx > 20
 htf_bearish = htf_ema9 < htf_ema21 and htf_ema21 < htf_ema50 and htf_adx > 20
@@ -203,13 +204,13 @@ trend_short = (pb_short_ema21 or pb_short_ema50) and (htf_bearish or (not htf_bu
 bb_touch_lower = low <= bb_lower * (1 + bb_touch_pct / 100)
 bb_close_inside_lower = close > bb_lower
 
-range_long = bb_touch_lower and bb_close_inside_lower and lower_wick_pct >= 0.1 and rsi_val < rsi_oversold and volume > vol_sma * vol_range_mult and in_demand
+range_long = bb_touch_lower and bb_close_inside_lower and lower_wick_pct >= 0.15 and close > open and rsi_val < rsi_oversold and volume > vol_sma * vol_range_mult and in_demand and close < bb_basis
 
 // Short: wick touches BB upper, close inside BB, wick >= 10%, RSI overbought, volume OK, in supply zone
 bb_touch_upper = high >= bb_upper * (1 - bb_touch_pct / 100)
 bb_close_inside_upper = close < bb_upper
 
-range_short = bb_touch_upper and bb_close_inside_upper and upper_wick_pct >= 0.1 and rsi_val > rsi_overbought and volume > vol_sma * vol_range_mult and in_supply
+range_short = bb_touch_upper and bb_close_inside_upper and upper_wick_pct >= 0.15 and close < open and rsi_val > rsi_overbought and volume > vol_sma * vol_range_mult and in_supply and close > bb_basis
 
 // ── Combined Signals ──
 long_signal  = (trend_long or range_long) and show_signals
@@ -224,29 +225,8 @@ short_sl  = close + atr_val * (is_trending ? sl_trend_mult : sl_range_mult)
 short_tp1 = range_short ? close - (close - bb_basis) * 0.50 : close - 2.0 * (short_sl - close)
 
 // ── Plot Signals ──
-plotshape(long_signal,  "Long",  shape.triangleup,   location.belowbar, color.new(#00ff88, 0), size=size.small)
-plotshape(short_signal, "Short", shape.triangledown, location.abovebar, color.new(#ff4466, 0), size=size.small)
-
-// ── TP/SL Lines ──
-if long_signal and show_tp_sl
-    label.new(bar_index, long_tp1, "TP", color=color.new(#00ff00, 70), textcolor=color.white, size=size.tiny, style=label.style_label_down)
-    label.new(bar_index, long_sl, "SL", color=color.new(#ff0000, 70), textcolor=color.white, size=size.tiny, style=label.style_label_up)
-    line.new(bar_index, long_tp1, bar_index + 5, long_tp1, color=color.new(#00ff00, 50), style=line.style_dashed)
-    line.new(bar_index, long_sl, bar_index + 5, long_sl, color=color.new(#ff0000, 50), style=line.style_dashed)
-
-if short_signal and show_tp_sl
-    label.new(bar_index, short_tp1, "TP", color=color.new(#00ff00, 70), textcolor=color.white, size=size.tiny, style=label.style_label_up)
-    label.new(bar_index, short_sl, "SL", color=color.new(#ff0000, 70), textcolor=color.white, size=size.tiny, style=label.style_label_down)
-    line.new(bar_index, short_tp1, bar_index + 5, short_tp1, color=color.new(#00ff00, 50), style=line.style_dashed)
-    line.new(bar_index, short_sl, bar_index + 5, short_sl, color=color.new(#ff0000, 50), style=line.style_dashed)
-
-// ── Regime Background ──
-bg_color = show_regime ? (is_trending ? color.new(#2196f3, 95) : color.new(#ff9800, 95)) : na
-bgcolor(bg_color, title="Regime")
-
-// ── HTF Bias Bar ──
-htf_color = htf_bullish ? color.new(#00ff88, 80) : htf_bearish ? color.new(#ff4466, 80) : na
-bgcolor(htf_color, title="HTF Bias")
+plotshape(long_signal,  "Long",  shape.triangleup,   location.belowbar, color.new(#00ff88, 0), size=size.tiny)
+plotshape(short_signal, "Short", shape.triangledown, location.abovebar, color.new(#ff4466, 0), size=size.tiny)
 
 // ── Info Table ──
 var table info = table.new(position.top_right, 2, 8, bgcolor=color.new(#1a1a2e, 20), border_width=1)
