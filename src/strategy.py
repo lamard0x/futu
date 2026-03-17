@@ -142,18 +142,19 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
     vol_sma = row["volume_sma"]
     atr = row["atr"]
 
-    # Wick touches BB lower, close inside BB, lower wick > 10%
+    # Wick touches BB lower, close inside BB, wick >= 25%, bullish candle
     candle_range = high - low
     lower_wick = min(close, opn) - low
     wick_pct = lower_wick / candle_range if candle_range > 0 else 0
     touch_lower = low <= bb_lower * (1 + cfg.bb_touch_pct / 100)
     close_inside = close > bb_lower
-    wick_ok = wick_pct >= 0.1
+    wick_ok = wick_pct >= 0.25
+    bullish = close > opn
 
     rsi_oversold = rsi < cfg.rsi_oversold
     volume_ok = volume > vol_sma * cfg.volume_range_mult
 
-    if not (touch_lower and close_inside and wick_ok and rsi_oversold and volume_ok):
+    if not (touch_lower and close_inside and wick_ok and bullish and rsi_oversold and volume_ok):
         reasons = []
         if not touch_lower:
             dist = (low - bb_lower) / bb_lower * 100
@@ -161,7 +162,9 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
         if touch_lower and not close_inside:
             reasons.append("close below BB")
         if touch_lower and not wick_ok:
-            reasons.append(f"wick {wick_pct:.0%} < 10%")
+            reasons.append(f"wick {wick_pct:.0%} < 25%")
+        if touch_lower and not bullish:
+            reasons.append("bearish candle")
         if not rsi_oversold:
             reasons.append(f"RSI {rsi:.0f} > {cfg.rsi_oversold}")
         if not volume_ok:
@@ -209,18 +212,19 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
     vol_sma = row["volume_sma"]
     atr = row["atr"]
 
-    # Wick touches BB upper, close inside BB, upper wick > 10%
+    # Wick touches BB upper, close inside BB, wick >= 25%, bearish candle
     candle_range = high - low
     upper_wick = high - max(close, opn)
     wick_pct = upper_wick / candle_range if candle_range > 0 else 0
     touch_upper = high >= bb_upper * (1 - cfg.bb_touch_pct / 100)
     close_inside = close < bb_upper
-    wick_ok = wick_pct >= 0.1
+    wick_ok = wick_pct >= 0.25
+    bearish = close < opn
 
     rsi_overbought = rsi > cfg.rsi_overbought
     volume_ok = volume > vol_sma * cfg.volume_range_mult
 
-    if not (touch_upper and close_inside and wick_ok and rsi_overbought and volume_ok):
+    if not (touch_upper and close_inside and wick_ok and bearish and rsi_overbought and volume_ok):
         reasons = []
         if not touch_upper:
             dist = (bb_upper - high) / bb_upper * 100
@@ -228,7 +232,9 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
         if touch_upper and not close_inside:
             reasons.append("close above BB")
         if touch_upper and not wick_ok:
-            reasons.append(f"wick {wick_pct:.0%} < 10%")
+            reasons.append(f"wick {wick_pct:.0%} < 25%")
+        if touch_upper and not bearish:
+            reasons.append("bullish candle")
         if not rsi_overbought:
             reasons.append(f"RSI {rsi:.0f} < {cfg.rsi_overbought}")
         if not volume_ok:
