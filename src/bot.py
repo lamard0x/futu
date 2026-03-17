@@ -9,7 +9,7 @@ from src.exchange import Exchange
 from src.indicators import compute_all
 from src.strategy import (
     scan_main, scan_alert, scan_trending_1h, scan_trending_pullback,
-    confirm_on_5m, detect_htf_bias,
+    confirm_on_5m, detect_htf_bias, find_demand_zones, find_supply_zones,
     Signal, SignalType, SignalSource, Regime, HTFBias,
 )
 from src.risk import RiskManager
@@ -564,8 +564,21 @@ class FutuBot:
         if len(candles) < 50:
             return None
 
+        # Fetch H1/H4 for stronger demand/supply zones
+        extra_demand, extra_supply = [], []
+        for htf in ("1h", "4h"):
+            try:
+                htf_candles = await self.exchange.fetch_candles(htf, 100, symbol=symbol)
+                if len(htf_candles) >= 20:
+                    htf_df = compute_all(htf_candles, self.config.indicators)
+                    extra_demand.extend(find_demand_zones(htf_df))
+                    extra_supply.extend(find_supply_zones(htf_df))
+            except Exception:
+                pass
+
         df = compute_all(candles, self.config.indicators)
-        signal = scan_main(df, self.config.strategy, bias, symbol=symbol.split("/")[0])
+        signal = scan_main(df, self.config.strategy, bias, symbol=symbol.split("/")[0],
+                          extra_demand=extra_demand, extra_supply=extra_supply)
 
         if signal:
             rr_ok, rr = self.risk.check_rr(signal)

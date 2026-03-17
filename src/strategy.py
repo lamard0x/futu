@@ -129,7 +129,7 @@ def in_supply_zone(price: float, zones: list[tuple[float, float]], tolerance: fl
 
 # ── RANGING MODE (mean reversion, filtered by HTF) ──────────────────
 
-def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, symbol: str = "") -> Signal | None:
+def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, symbol: str = "", extra_demand: list | None = None) -> Signal | None:
     if len(df) < 3:
         return None
     row = df.iloc[-2]  # Use closed candle — live candle wick/close unreliable
@@ -175,8 +175,8 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
         logger.debug("SKIP LONG %s: %s", symbol, " | ".join(reasons))
         return None
 
-    # Demand zone filter — price must be at a previous swing low area
-    demand_zones = find_demand_zones(df)
+    # Demand zone filter — check 15m + H1/H4 zones
+    demand_zones = find_demand_zones(df) + (extra_demand or [])
     if not in_demand_zone(low, demand_zones):
         logger.debug("SKIP LONG %s: no demand zone near %.2f", symbol, low)
         return None
@@ -201,7 +201,7 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
     )
 
 
-def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, symbol: str = "") -> Signal | None:
+def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, symbol: str = "", extra_supply: list | None = None) -> Signal | None:
     if len(df) < 3:
         return None
     row = df.iloc[-2]  # Use closed candle — live candle wick/close unreliable
@@ -247,8 +247,8 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
         logger.debug("SKIP SHORT %s: %s", symbol, " | ".join(reasons))
         return None
 
-    # Supply zone filter — price must be at a previous swing high area
-    supply_zones = find_supply_zones(df)
+    # Supply zone filter — check 15m + H1/H4 zones
+    supply_zones = find_supply_zones(df) + (extra_supply or [])
     if not in_supply_zone(high, supply_zones):
         logger.debug("SKIP SHORT %s: no supply zone near %.2f", symbol, high)
         return None
@@ -575,7 +575,8 @@ def check_alert_signal(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias) -> 
 
 # ── MAIN SCANNERS ────────────────────────────────────────────────────
 
-def scan_main(df_15m: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias = HTFBias.NEUTRAL, symbol: str = "") -> Signal | None:
+def scan_main(df_15m: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias = HTFBias.NEUTRAL, symbol: str = "",
+              extra_demand: list | None = None, extra_supply: list | None = None) -> Signal | None:
     """Scan 15m for ranging signals — BB mean reversion works in any regime."""
     regime = detect_regime(df_15m, cfg)
     logger.info(
@@ -583,10 +584,10 @@ def scan_main(df_15m: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias = HTFBias
         regime.value, bias.value, df_15m.iloc[-1].get("adx", 0),
     )
 
-    signal = check_ranging_long(df_15m, cfg, bias, symbol)
+    signal = check_ranging_long(df_15m, cfg, bias, symbol, extra_demand=extra_demand)
     if signal:
         return signal
-    return check_ranging_short(df_15m, cfg, bias, symbol)
+    return check_ranging_short(df_15m, cfg, bias, symbol, extra_supply=extra_supply)
 
 
 def confirm_on_5m(df_5m: pd.DataFrame, signal: Signal) -> bool:
