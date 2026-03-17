@@ -130,7 +130,9 @@ def in_supply_zone(price: float, zones: list[tuple[float, float]], tolerance: fl
 # ── RANGING MODE (mean reversion, filtered by HTF) ──────────────────
 
 def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, symbol: str = "") -> Signal | None:
-    row = df.iloc[-1]
+    if len(df) < 3:
+        return None
+    row = df.iloc[-2]  # Use closed candle — live candle wick/close unreliable
     close = row["close"]
     opn = row["open"]
     low = row["low"]
@@ -200,7 +202,9 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
 
 
 def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, symbol: str = "") -> Signal | None:
-    row = df.iloc[-1]
+    if len(df) < 3:
+        return None
+    row = df.iloc[-2]  # Use closed candle — live candle wick/close unreliable
     close = row["close"]
     opn = row["open"]
     low = row["low"]
