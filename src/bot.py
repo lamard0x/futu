@@ -55,6 +55,7 @@ class SymbolState:
     limit_order_ticks: int = 0            # ticks since limit placed
     limit_order_signal: Signal | None = None  # signal that triggered limit
     tp_price: float = 0.0                 # saved TP for trailing re-set
+    sl_price: float = 0.0                 # saved SL for client-side monitor
 
 
 class FutuBot:
@@ -637,6 +638,7 @@ class FutuBot:
                 self.states[symbol].position_candle_count = 0
                 self.states[symbol].partial_closed = False
                 self.states[symbol].tp_price = tp_target
+                self.states[symbol].sl_price = signal.sl_price
                 self.risk.on_trade_opened()
                 # Set TP/SL
                 await asyncio.sleep(0.5)
@@ -674,6 +676,7 @@ class FutuBot:
                         if signal.tp2_price and signal.regime == Regime.TRENDING:
                             tp = signal.tp2_price
                         state.tp_price = tp
+                        state.sl_price = signal.sl_price
                         try:
                             await self.exchange.update_tp_sl(tp_price=tp, sl_price=signal.sl_price)
                             tp_sl_ok = True
@@ -820,6 +823,7 @@ class FutuBot:
                             symbol.split("/")[0], regime, mark, mid_point,
                         )
                         await self.exchange.update_tp_sl(sl_price=entry)
+                        state.sl_price = entry
                         state.partial_closed = True
                 elif position["side"] == "short":
                     tp_dist = entry - tp
@@ -830,7 +834,36 @@ class FutuBot:
                             symbol.split("/")[0], regime, mark, mid_point,
                         )
                         await self.exchange.update_tp_sl(sl_price=entry)
+                        state.sl_price = entry
                         state.partial_closed = True
+
+            # Client-side SL monitor — backup if OKX algo order fails
+            if state.sl_price > 0:
+                sl_breached = False
+                if position["side"] == "long" and mark <= state.sl_price:
+                    sl_breached = True
+                elif position["side"] == "short" and mark >= state.sl_price:
+                    sl_breached = True
+                if sl_breached:
+                    logger.error(
+                        "CLIENT SL BREACH %s: mark %g vs SL %g — emergency close",
+                        symbol.split("/")[0], mark, state.sl_price,
+                    )
+                    try:
+                        await self.exchange.close_position()
+                        pnl = position["unrealized_pnl"]
+                        state.has_position = False
+                        state.has_trending_position = False
+                        state.partial_closed = False
+                        self.risk.on_trade_closed(pnl)
+                        await self._sync_balance()
+                        await telegram.notify_close(
+                            symbol, pnl, "CLIENT SL (algo failed)",
+                            self.config.risk.account_balance,
+                        )
+                    except Exception as close_err:
+                        logger.error("CLIENT SL close FAILED %s: %s", symbol.split("/")[0], close_err)
+                    return
         finally:
             self.exchange.config.symbol = orig_symbol
 

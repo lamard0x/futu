@@ -363,8 +363,8 @@ def scan_trending_1h(df_1h: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias) ->
     if len(df_1h) < cfg.lookback + 5:
         return None
 
-    row = df_1h.iloc[-1]
-    prev = df_1h.iloc[-2]
+    row = df_1h.iloc[-2]  # Use closed candle
+    prev = df_1h.iloc[-3]
 
     close = row["close"]
     high = row["high"]
@@ -449,7 +449,7 @@ def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias,
     if len(df) < 30:
         return None
 
-    row = df.iloc[-1]
+    row = df.iloc[-2]  # Use closed candle — live candle wick/close unreliable
 
     close = row["close"]
     opn = row["open"]
