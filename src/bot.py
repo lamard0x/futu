@@ -335,6 +335,10 @@ class FutuBot:
             # Skip if already has ANY position on this symbol
             if state.has_position or state.has_trending_position:
                 continue
+            # Skip if in cooldown (e.g. after order failure)
+            if state.cooldown > 0:
+                state.cooldown -= 1
+                continue
 
             can_trade, reason = self.risk.can_trade_new()
             if not can_trade:
@@ -626,9 +630,14 @@ class FutuBot:
             # Cancel stale algo orders before new entry
             await self.exchange._cancel_algo_orders()
 
-            order = await self.exchange.place_limit_order(
-                side=side, amount=amount, price=limit_price,
-            )
+            try:
+                order = await self.exchange.place_limit_order(
+                    side=side, amount=amount, price=limit_price,
+                )
+            except Exception as e:
+                logger.warning("Limit order FAILED %s: %s", symbol.split("/")[0], e)
+                self.states[symbol].cooldown = 6  # block re-signal for ~3 min
+                return
             logger.info("Limit order: %s status=%s id=%s", symbol.split("/")[0], order.status, order.order_id)
             if order.status in ("canceled", "cancelled", "rejected", "expired"):
                 logger.warning("Limit order rejected: %s", symbol.split("/")[0])
@@ -811,7 +820,9 @@ class FutuBot:
             # Move SL to breakeven when price reaches 50% of TP distance
             entry = position["entry_price"]
             tp = state.tp_price
-            mark = float(position.get("markPrice") or entry)
+            mark = float(position.get("markPrice") or 0)
+            if mark <= 0:
+                mark = entry  # fallback — trailing won't trigger but client SL still works
 
             if tp > 0 and not state.partial_closed:
                 if position["side"] == "long":

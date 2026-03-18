@@ -144,6 +144,7 @@ class Exchange:
                     "unrealized_pnl": float(pos.get("unrealizedPnl") or 0),
                     "notional": float(pos.get("notional") or 0),
                     "liquidation_price": float(pos.get("liquidationPrice") or 0),
+                    "markPrice": float(pos.get("markPrice") or pos.get("info", {}).get("markPx") or 0),
                 }
         return None
 
@@ -286,6 +287,7 @@ class Exchange:
 
         except Exception as e:
             logger.warning("Update TP/SL error: %s", e)
+            raise
 
     async def _cancel_sl_orders(self):
         """Cancel only SL algo orders for current symbol."""
