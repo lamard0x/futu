@@ -564,21 +564,27 @@ class FutuBot:
         if len(candles) < 50:
             return None
 
-        # Fetch H1/H4 for stronger demand/supply zones
-        extra_demand, extra_supply = [], []
+        # Fetch H1/H4 for demand/supply zone confluence scoring
+        zones_h1_demand, zones_h1_supply = [], []
+        zones_h4_demand, zones_h4_supply = [], []
         for htf in ("1h", "4h"):
             try:
                 htf_candles = await self.exchange.fetch_candles(htf, 100, symbol=symbol)
                 if len(htf_candles) >= 20:
                     htf_df = compute_all(htf_candles, self.config.indicators)
-                    extra_demand.extend(find_demand_zones(htf_df))
-                    extra_supply.extend(find_supply_zones(htf_df))
+                    if htf == "1h":
+                        zones_h1_demand = find_demand_zones(htf_df)
+                        zones_h1_supply = find_supply_zones(htf_df)
+                    else:
+                        zones_h4_demand = find_demand_zones(htf_df, strength=2)
+                        zones_h4_supply = find_supply_zones(htf_df, strength=2)
             except Exception:
                 pass
 
         df = compute_all(candles, self.config.indicators)
         signal = scan_main(df, self.config.strategy, bias, symbol=symbol.split("/")[0],
-                          extra_demand=extra_demand, extra_supply=extra_supply)
+                          zones_h1_demand=zones_h1_demand, zones_h1_supply=zones_h1_supply,
+                          zones_h4_demand=zones_h4_demand, zones_h4_supply=zones_h4_supply)
 
         if signal:
             rr_ok, rr = self.risk.check_rr(signal)
@@ -644,28 +650,6 @@ class FutuBot:
                 state.limit_order_signal = signal
                 state.has_position = True  # block new signals for this symbol
                 logger.info("Limit order pending: %s %s — will cancel after 15 min", symbol.split("/")[0], order.order_id)
-                try:
-                    candles = await self.exchange.fetch_candles(
-                        self.config.timeframe.main_tf, 100, symbol=symbol,
-                    )
-                    chart_bytes = generate_chart(
-                        candles, self.config.indicators,
-                        symbol=symbol.split("/")[0] + "/USDT",
-                        entries=[{
-                            "timestamp": None, "type": "entry",
-                            "side": side, "price": signal.entry_price,
-                            "sl": signal.sl_price, "tp": tp_target,
-                        }],
-                        regime=signal.regime.value,
-                        bias=self.states.get(symbol, SymbolState(symbol=symbol)).bias.value,
-                    )
-                except Exception as e:
-                    logger.warning("Chart generation failed: %s", e)
-                    chart_bytes = None
-                await telegram.notify_signal(
-                    symbol, side, signal.entry_price, signal.sl_price,
-                    tp_target, amount, rr, signal.regime.value, chart_bytes,
-                )
         finally:
             self.exchange.config.symbol = orig_symbol
 
@@ -684,26 +668,60 @@ class FutuBot:
                 if position is not None:
                     # Filled — set TP/SL
                     signal = state.limit_order_signal
+                    tp_sl_ok = False
                     if signal:
                         tp = signal.tp1_price
                         if signal.tp2_price and signal.regime == Regime.TRENDING:
                             tp = signal.tp2_price
                         state.tp_price = tp
-                        await self.exchange.update_tp_sl(tp_price=tp, sl_price=signal.sl_price)
+                        try:
+                            await self.exchange.update_tp_sl(tp_price=tp, sl_price=signal.sl_price)
+                            tp_sl_ok = True
+                        except Exception as e:
+                            logger.error("TP/SL FAILED for %s: %s — closing position", sym.split("/")[0], e)
+                            close_side = "sell" if position["side"] == "long" else "buy"
+                            try:
+                                await self.exchange.place_market_order(close_side, abs(position["size"]))
+                                logger.info("Emergency close %s — no TP/SL", sym.split("/")[0])
+                            except Exception as close_err:
+                                logger.error("Emergency close FAILED %s: %s", sym.split("/")[0], close_err)
+                            state.has_position = False
+                            state.has_trending_position = False
+                    else:
+                        tp_sl_ok = True
                     state.limit_order_id = None
                     state.limit_order_signal = None
                     state.limit_order_ticks = 0
                     state.position_candle_count = 0
                     state.partial_closed = False
-                    self.risk.on_trade_opened()
-                    logger.info("Limit filled: %s — TP/SL set", sym.split("/")[0])
-                    if signal:
+                    if tp_sl_ok:
+                        self.risk.on_trade_opened()
+                        logger.info("Limit filled: %s — TP/SL set", sym.split("/")[0])
+                    if signal and tp_sl_ok:
                         side = "buy" if signal.type == SignalType.LONG else "sell"
                         tp = signal.tp1_price
                         rr = abs(tp - signal.entry_price) / abs(signal.entry_price - signal.sl_price) if signal.sl_price != signal.entry_price else 0
+                        chart_bytes = None
+                        try:
+                            candles = await self.exchange.fetch_candles(
+                                self.config.timeframe.main_tf, 100, symbol=sym,
+                            )
+                            chart_bytes = generate_chart(
+                                candles, self.config.indicators,
+                                symbol=sym.split("/")[0] + "/USDT",
+                                entries=[{
+                                    "timestamp": None, "type": "entry",
+                                    "side": side, "price": signal.entry_price,
+                                    "sl": signal.sl_price, "tp": tp,
+                                }],
+                                regime=signal.regime.value,
+                                bias=state.bias.value,
+                            )
+                        except Exception:
+                            pass
                         await telegram.notify_signal(
                             sym, side, signal.entry_price, signal.sl_price,
-                            tp, position["size"], rr, signal.regime.value, None,
+                            tp, position["size"], rr, signal.regime.value, chart_bytes,
                         )
                 elif state.limit_order_ticks >= 30:
                     # 30 ticks (15 min) — cancel

@@ -86,11 +86,12 @@ class RiskManager:
         if risk == 0:
             return False, 0.0
         rr = reward / risk
-        min_rr = (
-            self.config.min_rr_trending
-            if signal.regime == Regime.TRENDING
-            else self.config.min_rr_ranging
-        )
+        if signal.regime == Regime.TRENDING:
+            min_rr = self.config.min_rr_trending
+        elif signal.regime == Regime.RANGING and signal.confluence_score >= 2:
+            min_rr = self.config.min_rr_ranging_confluence
+        else:
+            min_rr = self.config.min_rr_ranging
         return rr >= min_rr, rr
 
     def on_trade_opened(self):
