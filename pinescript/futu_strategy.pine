@@ -1,5 +1,5 @@
 //@version=5
-indicator("FUTU Scalper v1", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+indicator("FUTU Scalper v2", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
 
 // ── Inputs ──
 ema_fast_len  = input.int(9, "EMA Fast")
@@ -14,27 +14,30 @@ chand_period  = input.int(22, "Chandelier Period")
 chand_mult    = input.float(3.0, "Chandelier Mult")
 vol_sma_len   = input.int(20, "Volume SMA")
 
-adx_threshold = input.float(35.0, "ADX Trending Threshold")
-rsi_oversold  = input.float(42.0, "RSI Oversold")
-rsi_overbought = input.float(58.0, "RSI Overbought")
-vol_trend_mult = input.float(1.5, "Volume Trend Mult")
-vol_range_mult = input.float(0.6, "Volume Range Mult")
+adx_threshold  = input.float(35.0, "ADX Trending Threshold")
 bb_touch_pct   = input.float(0.8, "BB Touch %")
+vol_range_mult = input.float(0.4, "Volume Range Mult")
+sl_range_mult  = input.float(0.5, "SL Ranging ATR Mult")
+sl_trend_mult  = input.float(1.5, "SL Trending ATR Mult")
 
-tp1_atr_mult  = input.float(1.5, "TP1 ATR Mult")
-tp2_atr_mult  = input.float(2.5, "TP2 ATR Mult")
-sl_trend_mult = input.float(1.5, "SL Trending ATR Mult")
-sl_range_mult = input.float(1.0, "SL Ranging ATR Mult")
+// RSI Hayden zones
+rsi_bull_os  = input.float(42.0, "RSI Bull Oversold", group="RSI Hayden")
+rsi_bull_ob  = input.float(65.0, "RSI Bull Overbought", group="RSI Hayden")
+rsi_bear_os  = input.float(35.0, "RSI Bear Oversold", group="RSI Hayden")
+rsi_bear_ob  = input.float(58.0, "RSI Bear Overbought", group="RSI Hayden")
+rsi_neut_os  = input.float(45.0, "RSI Neutral Oversold", group="RSI Hayden")
+rsi_neut_ob  = input.float(55.0, "RSI Neutral Overbought", group="RSI Hayden")
 
 // Demand/Supply zone inputs
-zone_lookback  = input.int(50, "Zone Lookback", minval=10)
-zone_strength  = input.int(3, "Zone Swing Strength", minval=1, maxval=10)
-show_zones     = input.bool(true, "Show Demand/Supply Zones")
+zone_lookback  = input.int(50, "Zone Lookback", minval=10, group="S/D Zones")
+zone_strength  = input.int(3, "Zone Swing Strength", minval=1, maxval=10, group="S/D Zones")
+show_zones     = input.bool(true, "Show Demand/Supply Zones", group="S/D Zones")
 
-show_signals  = input.bool(true, "Show Entry Signals")
-show_tp_sl    = input.bool(true, "Show TP/SL Levels")
-show_regime   = input.bool(true, "Show Regime Background")
+show_signals    = input.bool(true, "Show Entry Signals")
+show_tp_sl      = input.bool(true, "Show TP/SL Levels")
+show_regime     = input.bool(true, "Show Regime Background")
 show_chandelier = input.bool(true, "Show Chandelier Exit")
+show_75pct      = input.bool(true, "Show 75% Partial Signals")
 
 // ── EMAs ──
 ema9  = ta.ema(close, ema_fast_len)
@@ -81,27 +84,30 @@ vol_sma = ta.sma(volume, vol_sma_len)
 is_trending = adx_val >= adx_threshold
 is_ranging  = not is_trending
 
-// ── HTF Bias (H4) ──
+// ── HTF Bias (H4) — simplified EMA9 vs EMA21 ──
 htf_ema9  = request.security(syminfo.tickerid, "240", ta.ema(close, ema_fast_len))
 htf_ema21 = request.security(syminfo.tickerid, "240", ta.ema(close, ema_mid_len))
-htf_ema50 = request.security(syminfo.tickerid, "240", ta.ema(close, ema_slow_len))
-[_, __, htf_adx_raw] = ta.dmi(adx_period, adx_period)
-htf_adx   = request.security(syminfo.tickerid, "240", htf_adx_raw)
 
-htf_bullish = htf_ema9 > htf_ema21 and htf_ema21 > htf_ema50 and htf_adx > 20
-htf_bearish = htf_ema9 < htf_ema21 and htf_ema21 < htf_ema50 and htf_adx > 20
+htf_bullish = htf_ema9 > htf_ema21
+htf_bearish = htf_ema9 < htf_ema21
+htf_neutral = not htf_bullish and not htf_bearish
 
-// ── Candle metrics ──
-body = math.abs(close - open)
-range_hl = high - low
-body_ratio = range_hl > 0 ? body / range_hl : 0
-lower_wick = math.min(close, open) - low
-upper_wick = high - math.max(close, open)
-lower_wick_pct = range_hl > 0 ? lower_wick / range_hl : 0
-upper_wick_pct = range_hl > 0 ? upper_wick / range_hl : 0
+// RSI Hayden thresholds based on H4 bias
+rsi_os = htf_bullish ? rsi_bull_os : htf_bearish ? rsi_bear_os : rsi_neut_os
+rsi_ob = htf_bullish ? rsi_bull_ob : htf_bearish ? rsi_bear_ob : rsi_neut_ob
+
+// ── Candle metrics (closed candle = [1]) ──
+c_close = close[1]
+c_open  = open[1]
+c_high  = high[1]
+c_low   = low[1]
+c_range = c_high - c_low
+c_lower_wick = math.min(c_close, c_open) - c_low
+c_upper_wick = c_high - math.max(c_close, c_open)
+c_lower_wick_pct = c_range > 0 ? c_lower_wick / c_range : 0
+c_upper_wick_pct = c_range > 0 ? c_upper_wick / c_range : 0
 
 // ── Demand / Supply Zone Detection ──
-// Swing low = low is lowest within `strength` bars on each side
 is_swing_low(idx, str) =>
     result = true
     for j = 1 to str
@@ -118,118 +124,205 @@ is_swing_high(idx, str) =>
             break
     result
 
-// Find nearest demand zone (swing low body range)
-var float demand_low = na
-var float demand_high = na
-var int demand_bar = na
-var float supply_low = na
-var float supply_high = na
-var int supply_bar = na
+// Find ALL zones within lookback (not just nearest)
+var float[] demand_lows  = array.new_float()
+var float[] demand_highs = array.new_float()
+var int[]   demand_bars  = array.new_int()
+var float[] supply_lows  = array.new_float()
+var float[] supply_highs = array.new_float()
+var int[]   supply_bars  = array.new_int()
 
-// Scan for most recent swing low/high within lookback
-find_demand() =>
-    d_low = float(na)
-    d_high = float(na)
-    d_bar = int(na)
+if barstate.islast
+    array.clear(demand_lows)
+    array.clear(demand_highs)
+    array.clear(demand_bars)
+    array.clear(supply_lows)
+    array.clear(supply_highs)
+    array.clear(supply_bars)
     for i = zone_strength to zone_lookback
         if is_swing_low(i, zone_strength)
-            d_low := low[i]
-            d_high := math.min(open[i], close[i])
-            d_bar := bar_index - i
-            break
-    [d_low, d_high, d_bar]
-
-find_supply() =>
-    s_low = float(na)
-    s_high = float(na)
-    s_bar = int(na)
-    for i = zone_strength to zone_lookback
+            array.push(demand_lows, low[i])
+            array.push(demand_highs, math.min(open[i], close[i]))
+            array.push(demand_bars, bar_index - i)
         if is_swing_high(i, zone_strength)
-            s_low := math.max(open[i], close[i])
-            s_high := high[i]
-            s_bar := bar_index - i
-            break
-    [s_low, s_high, s_bar]
+            array.push(supply_lows, math.max(open[i], close[i]))
+            array.push(supply_highs, high[i])
+            array.push(supply_bars, bar_index - i)
 
-[d_lo, d_hi, d_bi] = find_demand()
-[s_lo, s_hi, s_bi] = find_supply()
-demand_low := d_lo
-demand_high := d_hi
-demand_bar := d_bi
-supply_low := s_lo
-supply_high := s_hi
-supply_bar := s_bi
+// Check if price is in any zone
+in_any_demand(price) =>
+    found = false
+    if array.size(demand_lows) > 0
+        for i = 0 to array.size(demand_lows) - 1
+            zl = array.get(demand_lows, i)
+            zh = array.get(demand_highs, i)
+            margin = (zh - zl) * 1.0
+            if price >= zl - margin and price <= zh + margin
+                found := true
+                break
+    found
 
-// Check if price is in zone (with small tolerance)
-in_demand = not na(demand_low) and not na(demand_high) and low <= demand_high * 1.002 and low >= demand_low * 0.998
-in_supply = not na(supply_low) and not na(supply_high) and high >= supply_low * 0.998 and high <= supply_high * 1.002
+in_any_supply(price) =>
+    found = false
+    if array.size(supply_lows) > 0
+        for i = 0 to array.size(supply_lows) - 1
+            zl = array.get(supply_lows, i)
+            zh = array.get(supply_highs, i)
+            margin = (zh - zl) * 1.0
+            if price >= zl - margin and price <= zh + margin
+                found := true
+                break
+    found
+
+in_demand = in_any_demand(c_low)
+in_supply = in_any_supply(c_high)
 
 // ── Draw Demand/Supply Zones ──
-var box demand_box = na
-var box supply_box = na
+var box[] zone_boxes = array.new_box()
 
 if show_zones and barstate.islast
-    // Delete old boxes
-    if not na(demand_box)
-        box.delete(demand_box)
-    if not na(supply_box)
-        box.delete(supply_box)
+    // Clear old boxes
+    for i = 0 to array.size(zone_boxes) - 1
+        box.delete(array.get(zone_boxes, i))
+    array.clear(zone_boxes)
 
-    // Draw demand zone (green)
-    if not na(demand_low) and not na(demand_bar)
-        demand_box := box.new(demand_bar, demand_high, bar_index + 10, demand_low,
-             border_color=color.new(#00ff88, 60), bgcolor=color.new(#00ff88, 88),
-             border_width=1, border_style=line.style_dashed)
+    // Draw demand zones (green)
+    if array.size(demand_lows) > 0
+        for i = 0 to math.min(array.size(demand_lows) - 1, 5)
+            b = box.new(array.get(demand_bars, i), array.get(demand_highs, i),
+                 bar_index + 10, array.get(demand_lows, i),
+                 border_color=color.new(#00ff88, 60), bgcolor=color.new(#00ff88, 90),
+                 border_width=1, border_style=line.style_dashed)
+            array.push(zone_boxes, b)
 
-    // Draw supply zone (red)
-    if not na(supply_low) and not na(supply_bar)
-        supply_box := box.new(supply_bar, supply_high, bar_index + 10, supply_low,
-             border_color=color.new(#ff4466, 60), bgcolor=color.new(#ff4466, 88),
-             border_width=1, border_style=line.style_dashed)
+    // Draw supply zones (red)
+    if array.size(supply_lows) > 0
+        for i = 0 to math.min(array.size(supply_lows) - 1, 5)
+            b = box.new(array.get(supply_bars, i), array.get(supply_highs, i),
+                 bar_index + 10, array.get(supply_lows, i),
+                 border_color=color.new(#ff4466, 60), bgcolor=color.new(#ff4466, 90),
+                 border_width=1, border_style=line.style_dashed)
+            array.push(zone_boxes, b)
 
-// ── Trending Pullback Conditions (EMA bounce) ──
-// Long: bullish candle + wick bounce at EMA21/50
-pb_long_ema21 = is_trending and di_plus > di_minus and ema9 > ema21 and close > open and 40 < rsi_val and rsi_val < 70 and low <= ema21 * 1.002 and close > ema21 and lower_wick_pct >= 0.4
-pb_long_ema50 = is_trending and di_plus > di_minus and ema9 > ema21 and close > open and 40 < rsi_val and rsi_val < 70 and low <= ema50 * 1.002 and close > ema50 and lower_wick_pct >= 0.4
+// ═══════════════════════════════════════════════════
+// ── RANGING SIGNALS (closed candle, BB mean reversion) ──
+// ═══════════════════════════════════════════════════
 
-// Short: bearish candle + wick rejection at EMA21/50
-pb_short_ema21 = is_trending and di_minus > di_plus and ema9 < ema21 and close < open and 30 < rsi_val and rsi_val < 60 and high >= ema21 * 0.998 and close < ema21 and upper_wick_pct >= 0.4
-pb_short_ema50 = is_trending and di_minus > di_plus and ema9 < ema21 and close < open and 30 < rsi_val and rsi_val < 60 and high >= ema50 * 0.998 and close < ema50 and upper_wick_pct >= 0.4
+// Mandatory conditions (all must pass)
+r_long_mandatory  = c_low <= bb_lower[1] * (1 + bb_touch_pct / 100) and c_close > bb_lower[1] and in_demand and c_close < bb_basis[1]
+r_short_mandatory = c_high >= bb_upper[1] * (1 - bb_touch_pct / 100) and c_close < bb_upper[1] and in_supply and c_close > bb_basis[1]
 
-trend_long = (pb_long_ema21 or pb_long_ema50) and (htf_bullish or (not htf_bullish and not htf_bearish))
-trend_short = (pb_short_ema21 or pb_short_ema50) and (htf_bearish or (not htf_bullish and not htf_bearish))
+// Optional conditions (count 0-4)
+r_long_opt_wick   = c_lower_wick_pct >= 0.15
+r_long_opt_candle = c_close > c_open
+r_long_opt_rsi    = rsi_val[1] <= rsi_os
+r_long_opt_vol    = volume[1] > vol_sma[1] * vol_range_mult
+r_long_opt_count  = (r_long_opt_wick ? 1 : 0) + (r_long_opt_candle ? 1 : 0) + (r_long_opt_rsi ? 1 : 0) + (r_long_opt_vol ? 1 : 0)
 
-// ── Ranging Entry Conditions (BB + wick + demand/supply) ──
-// Long: wick touches BB lower, close inside BB, wick >= 10%, RSI oversold, volume OK, in demand zone
-bb_touch_lower = low <= bb_lower * (1 + bb_touch_pct / 100)
-bb_close_inside_lower = close > bb_lower
+r_short_opt_wick   = c_upper_wick_pct >= 0.15
+r_short_opt_candle = c_close < c_open
+r_short_opt_rsi    = rsi_val[1] >= rsi_ob
+r_short_opt_vol    = volume[1] > vol_sma[1] * vol_range_mult
+r_short_opt_count  = (r_short_opt_wick ? 1 : 0) + (r_short_opt_candle ? 1 : 0) + (r_short_opt_rsi ? 1 : 0) + (r_short_opt_vol ? 1 : 0)
 
-range_long = bb_touch_lower and bb_close_inside_lower and lower_wick_pct >= 0.15 and close > open and rsi_val < rsi_oversold and volume > vol_sma * vol_range_mult and in_demand and close < bb_basis
+// Signal: 4/4 = full (100%), 2-3/4 = partial (75%), <2 = skip
+range_long_full    = r_long_mandatory  and r_long_opt_count  == 4
+range_long_partial = r_long_mandatory  and r_long_opt_count  >= 2 and r_long_opt_count < 4
+range_long         = range_long_full or (range_long_partial and show_75pct)
 
-// Short: wick touches BB upper, close inside BB, wick >= 10%, RSI overbought, volume OK, in supply zone
-bb_touch_upper = high >= bb_upper * (1 - bb_touch_pct / 100)
-bb_close_inside_upper = close < bb_upper
+range_short_full    = r_short_mandatory and r_short_opt_count == 4
+range_short_partial = r_short_mandatory and r_short_opt_count >= 2 and r_short_opt_count < 4
+range_short         = range_short_full or (range_short_partial and show_75pct)
 
-range_short = bb_touch_upper and bb_close_inside_upper and upper_wick_pct >= 0.15 and close < open and rsi_val > rsi_overbought and volume > vol_sma * vol_range_mult and in_supply and close > bb_basis
+// ═══════════════════════════════════════════════════
+// ── TRENDING PULLBACK SIGNALS (closed candle, EMA bounce) ──
+// ═══════════════════════════════════════════════════
 
+// Mandatory: ADX >= 35, DI alignment, EMA order, EMA touch + close correct side
+t_long_adx   = adx_val[1] >= adx_threshold
+t_long_di    = di_plus[1] > di_minus[1]
+t_long_ema   = ema9[1] > ema21[1]
+t_long_ema21_touch = c_low <= ema21[1] * 1.002 and c_close > ema21[1]
+t_long_ema50_touch = c_low <= ema50[1] * 1.002 and c_close > ema50[1]
+t_long_mandatory = t_long_adx and t_long_di and t_long_ema and (t_long_ema21_touch or t_long_ema50_touch)
+
+t_short_di    = di_minus[1] > di_plus[1]
+t_short_ema   = ema9[1] < ema21[1]
+t_short_ema21_touch = c_high >= ema21[1] * 0.998 and c_close < ema21[1]
+t_short_ema50_touch = c_high >= ema50[1] * 0.998 and c_close < ema50[1]
+t_short_mandatory = t_long_adx and t_short_di and t_short_ema and (t_short_ema21_touch or t_short_ema50_touch)
+
+// Optional: H4 bias, wick >= 40%, RSI range, candle direction
+t_long_opt_bias   = htf_bullish or htf_neutral
+t_long_opt_wick   = c_lower_wick_pct >= 0.4
+t_long_opt_rsi    = rsi_val[1] > 40 and rsi_val[1] < 70
+t_long_opt_candle = c_close > c_open
+t_long_opt_count  = (t_long_opt_bias ? 1 : 0) + (t_long_opt_wick ? 1 : 0) + (t_long_opt_rsi ? 1 : 0) + (t_long_opt_candle ? 1 : 0)
+
+t_short_opt_bias   = htf_bearish or htf_neutral
+t_short_opt_wick   = c_upper_wick_pct >= 0.4
+t_short_opt_rsi    = rsi_val[1] > 30 and rsi_val[1] < 60
+t_short_opt_candle = c_close < c_open
+t_short_opt_count  = (t_short_opt_bias ? 1 : 0) + (t_short_opt_wick ? 1 : 0) + (t_short_opt_rsi ? 1 : 0) + (t_short_opt_candle ? 1 : 0)
+
+trend_long_full    = t_long_mandatory  and t_long_opt_count  == 4
+trend_long_partial = t_long_mandatory  and t_long_opt_count  >= 2 and t_long_opt_count < 4
+trend_long         = trend_long_full or (trend_long_partial and show_75pct)
+
+trend_short_full    = t_short_mandatory and t_short_opt_count == 4
+trend_short_partial = t_short_mandatory and t_short_opt_count >= 2 and t_short_opt_count < 4
+trend_short         = trend_short_full or (trend_short_partial and show_75pct)
+
+// ═══════════════════════════════════════════════════
 // ── Combined Signals ──
-long_signal  = (trend_long or range_long) and show_signals
-short_signal = (trend_short or range_short) and show_signals
+// ═══════════════════════════════════════════════════
+long_full     = (range_long_full or trend_long_full) and show_signals
+long_partial  = (range_long_partial or trend_long_partial) and show_signals and show_75pct
+short_full    = (range_short_full or trend_short_full) and show_signals
+short_partial = (range_short_partial or trend_short_partial) and show_signals and show_75pct
 
 // ── TP/SL Calculations ──
-// Ranging: TP = 85% to BB mid, SL = 1 ATR
+// Ranging: TP = 50% to BB mid, SL = 0.5 ATR
 // Trending: TP = 2x risk, SL = 1.5 ATR from EMA
-long_sl  = close - atr_val * (is_trending ? sl_trend_mult : sl_range_mult)
-long_tp1 = range_long ? close + (bb_basis - close) * 0.50 : close + 2.0 * (close - long_sl)
-short_sl  = close + atr_val * (is_trending ? sl_trend_mult : sl_range_mult)
-short_tp1 = range_short ? close - (close - bb_basis) * 0.50 : close - 2.0 * (short_sl - close)
+long_sl  = c_close - atr_val[1] * (is_trending ? sl_trend_mult : sl_range_mult)
+long_tp  = range_long ? c_close + (bb_basis[1] - c_close) * 0.50 : c_close + 2.0 * (c_close - long_sl)
+short_sl  = c_close + atr_val[1] * (is_trending ? sl_trend_mult : sl_range_mult)
+short_tp  = range_short ? c_close - (c_close - bb_basis[1]) * 0.50 : c_close - 2.0 * (short_sl - c_close)
 
 // ── Plot Signals ──
-plotshape(long_signal,  "Long",  shape.triangleup,   location.belowbar, color.new(#00ff88, 0), size=size.tiny)
-plotshape(short_signal, "Short", shape.triangledown, location.abovebar, color.new(#ff4466, 0), size=size.tiny)
+// Full signals (100%) = solid triangles
+plotshape(long_full,  "Long 100%",  shape.triangleup,   location.belowbar, color.new(#00ff88, 0), size=size.small)
+plotshape(short_full, "Short 100%", shape.triangledown, location.abovebar, color.new(#ff4466, 0), size=size.small)
+// Partial signals (75%) = smaller, semi-transparent
+plotshape(long_partial and not long_full,   "Long 75%",  shape.triangleup,   location.belowbar, color.new(#00ff88, 50), size=size.tiny)
+plotshape(short_partial and not short_full, "Short 75%", shape.triangledown, location.abovebar, color.new(#ff4466, 50), size=size.tiny)
+
+// ── TP/SL Lines ──
+plot(show_tp_sl and (long_full or long_partial)   ? long_tp  : na, "Long TP",  color=color.new(#00ff88, 60), style=plot.style_cross)
+plot(show_tp_sl and (long_full or long_partial)   ? long_sl  : na, "Long SL",  color=color.new(#ff4466, 60), style=plot.style_cross)
+plot(show_tp_sl and (short_full or short_partial) ? short_tp : na, "Short TP", color=color.new(#00ff88, 60), style=plot.style_cross)
+plot(show_tp_sl and (short_full or short_partial) ? short_sl : na, "Short SL", color=color.new(#ff4466, 60), style=plot.style_cross)
+
+// ── Regime Background ──
+bgcolor(show_regime and is_trending ? color.new(#2196f3, 95) : show_regime and is_ranging ? color.new(#ff9800, 97) : na)
+
+// ── Condition Count Labels ──
+if (long_full or long_partial) and show_signals
+    is_range = range_long_full or range_long_partial
+    opt_n = is_range ? r_long_opt_count : t_long_opt_count
+    lbl_text = (is_range ? "R" : "T") + " " + str.tostring(opt_n) + "/4"
+    lbl_clr = opt_n == 4 ? #00ff88 : #ffeb3b
+    label.new(bar_index, c_low, lbl_text, style=label.style_label_up, color=color.new(lbl_clr, 70), textcolor=color.white, size=size.tiny)
+
+if (short_full or short_partial) and show_signals
+    is_range = range_short_full or range_short_partial
+    opt_n = is_range ? r_short_opt_count : t_short_opt_count
+    lbl_text = (is_range ? "R" : "T") + " " + str.tostring(opt_n) + "/4"
+    lbl_clr = opt_n == 4 ? #ff4466 : #ffeb3b
+    label.new(bar_index, c_high, lbl_text, style=label.style_label_down, color=color.new(lbl_clr, 70), textcolor=color.white, size=size.tiny)
 
 // ── Info Table ──
-var table info = table.new(position.top_right, 2, 8, bgcolor=color.new(#1a1a2e, 20), border_width=1)
+var table info = table.new(position.top_right, 2, 9, bgcolor=color.new(#1a1a2e, 20), border_width=1)
 
 if barstate.islast
     regime_text = is_trending ? "TREND" : "RANGE"
@@ -242,18 +335,22 @@ if barstate.islast
     table.cell(info, 0, 2, "ADX", text_color=color.gray, text_size=size.small)
     table.cell(info, 1, 2, str.tostring(adx_val, "#.0"), text_color=color.white, text_size=size.small)
     table.cell(info, 0, 3, "RSI", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 3, str.tostring(rsi_val, "#.0"), text_color=rsi_val > 60 ? #ff4466 : rsi_val < 40 ? #00ff88 : color.white, text_size=size.small)
-    table.cell(info, 0, 4, "+DI/-DI", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 4, str.tostring(di_plus, "#.0") + "/" + str.tostring(di_minus, "#.0"), text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 5, "ATR", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 5, str.tostring(atr_val, "#.1"), text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 6, "Vol", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 6, str.tostring(volume / vol_sma, "#.1") + "x", text_color=volume > vol_sma ? #00ff88 : #ff4466, text_size=size.small)
-    table.cell(info, 0, 7, "D/S Zone", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 3, str.tostring(rsi_val, "#.0"), text_color=rsi_val > rsi_ob ? #ff4466 : rsi_val < rsi_os ? #00ff88 : color.white, text_size=size.small)
+    table.cell(info, 0, 4, "RSI Zone", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 4, str.tostring(rsi_os, "#") + "/" + str.tostring(rsi_ob, "#"), text_color=#ffeb3b, text_size=size.small)
+    table.cell(info, 0, 5, "+DI/-DI", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 5, str.tostring(di_plus, "#.0") + "/" + str.tostring(di_minus, "#.0"), text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 6, "ATR", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 6, str.tostring(atr_val, "#.1"), text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 7, "Vol", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 7, str.tostring(volume / vol_sma, "#.1") + "x", text_color=volume > vol_sma ? #00ff88 : #ff4466, text_size=size.small)
+    table.cell(info, 0, 8, "D/S Zone", text_color=color.gray, text_size=size.small)
     zone_text = in_demand ? "DEMAND" : in_supply ? "SUPPLY" : "-"
     zone_clr = in_demand ? #00ff88 : in_supply ? #ff4466 : color.gray
-    table.cell(info, 1, 7, zone_text, text_color=zone_clr, text_size=size.small)
+    table.cell(info, 1, 8, zone_text, text_color=zone_clr, text_size=size.small)
 
 // ── Alerts ──
-alertcondition(long_signal,  "FUTU Long Signal",  "FUTU: LONG entry signal")
-alertcondition(short_signal, "FUTU Short Signal", "FUTU: SHORT entry signal")
+alertcondition(long_full,               "FUTU Long 100%",  "FUTU: LONG 100% signal")
+alertcondition(long_partial,            "FUTU Long 75%",   "FUTU: LONG 75% signal")
+alertcondition(short_full,              "FUTU Short 100%", "FUTU: SHORT 100% signal")
+alertcondition(short_partial,           "FUTU Short 75%",  "FUTU: SHORT 75% signal")
