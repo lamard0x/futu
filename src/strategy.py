@@ -198,7 +198,8 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
 
     # ── Mandatory conditions (all must pass) ──
     touch_lower = low <= bb_lower * (1 + cfg.bb_touch_pct / 100)
-    close_inside = close > bb_lower
+    bb_width = row["bb_upper"] - bb_lower
+    close_inside = close > bb_lower + bb_width * 0.10  # must be above 10% of BB range
     # Anti-breakout: previous candle must also be above BB lower (not a fresh breakdown)
     prev_row = df.iloc[-3] if len(df) >= 4 else row
     prev_above_bb = prev_row["close"] > prev_row["bb_lower"]
@@ -293,7 +294,8 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
 
     # ── Mandatory conditions (all must pass) ──
     touch_upper = high >= bb_upper * (1 - cfg.bb_touch_pct / 100)
-    close_inside = close < bb_upper
+    bb_width = bb_upper - row["bb_lower"]
+    close_inside = close < bb_upper - bb_width * 0.10  # must be below 90% of BB range
     # Anti-breakout: previous candle must also be below BB upper (not a fresh breakout)
     prev_row = df.iloc[-3] if len(df) >= 4 else row
     prev_below_bb = prev_row["close"] < prev_row["bb_upper"]
