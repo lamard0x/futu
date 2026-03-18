@@ -186,11 +186,14 @@ class Exchange:
     async def place_market_order(
         self, side: str, amount: float,
         tp_price: Optional[float] = None, sl_price: Optional[float] = None,
+        reduce_only: bool = False,
     ) -> OrderResult:
         # Step 1: Place market order (no TP/SL — OKX rejects inline TP/SL)
         params = {}
         if self.exchange_name == "okx":
             params["tdMode"] = self.config.margin_mode
+            if reduce_only:
+                params["reduceOnly"] = True
 
         # Convert coin amount to contract count for OKX
         order_amount = amount
@@ -373,7 +376,7 @@ class Exchange:
             except Exception:
                 pass
         close_side = "sell" if position["side"] == "long" else "buy"
-        await self.place_market_order(close_side, position["size"])
+        await self.place_market_order(close_side, position["size"], reduce_only=True)
         logger.info("Position closed")
 
     async def get_closed_pnl(self, symbol: str | None = None) -> float:

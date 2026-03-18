@@ -709,7 +709,7 @@ class FutuBot:
                             logger.error("TP/SL FAILED for %s: %s — closing position", sym.split("/")[0], e)
                             close_side = "sell" if position["side"] == "long" else "buy"
                             try:
-                                await self.exchange.place_market_order(close_side, abs(position["size"]))
+                                await self.exchange.place_market_order(close_side, abs(position["size"]), reduce_only=True)
                                 logger.info("Emergency close %s — no TP/SL", sym.split("/")[0])
                             except Exception as close_err:
                                 logger.error("Emergency close FAILED %s: %s", sym.split("/")[0], close_err)
