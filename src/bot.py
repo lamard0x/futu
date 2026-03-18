@@ -120,6 +120,18 @@ class FutuBot:
     async def _sync_open_positions(self):
         """Sync open positions from exchange on startup — prevents orphaned trades."""
         try:
+            # Cancel ALL pending limit orders left from previous session
+            try:
+                open_orders = await self.exchange.exchange.fetch_open_orders()
+                for o in open_orders:
+                    try:
+                        await self.exchange.exchange.cancel_order(o["id"], o["symbol"])
+                        logger.info("Startup: cancelled stale order %s %s", o["symbol"].split("/")[0], o["id"])
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning("Startup cancel orders error: %s", e)
+
             positions = await self.exchange.exchange.fetch_positions()
             synced = 0
             for p in positions:
@@ -131,7 +143,7 @@ class FutuBot:
                     self.states[sym] = SymbolState(symbol=sym)
                 self.states[sym].has_position = True
                 self.states[sym].limit_order_id = None
-                # Try to get TP from existing algo orders
+                # Sync TP and SL from existing algo orders
                 try:
                     inst_id = sym.replace("/", "-").replace(":USDT", "-SWAP")
                     r = await self.exchange.exchange.private_get_trade_orders_algo_pending({
@@ -139,9 +151,13 @@ class FutuBot:
                     })
                     for o in r.get("data", []):
                         tp_px = o.get("tpTriggerPx")
+                        sl_px = o.get("slTriggerPx")
                         if tp_px:
                             self.states[sym].tp_price = float(tp_px)
                             logger.info("Synced TP for %s: %s", sym.split("/")[0], tp_px)
+                        if sl_px:
+                            self.states[sym].sl_price = float(sl_px)
+                            logger.info("Synced SL for %s: %s", sym.split("/")[0], sl_px)
                 except Exception:
                     pass
                 synced += 1
