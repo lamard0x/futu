@@ -68,6 +68,11 @@ class RiskManager:
             return 0.0
         position_value = risk_amount / sl_distance_pct
 
+        # 75% conditions met → 0.75x volume
+        if signal.condition_pct < 1.0:
+            position_value *= signal.condition_pct
+            logger.info("Size reduced: %.0f%% conditions → %.2fx vol", signal.condition_pct * 100, signal.condition_pct)
+
         # Cap notional: expect max ~6 concurrent positions
         max_notional = (self.config.account_balance * leverage) / 6
         if position_value > max_notional:

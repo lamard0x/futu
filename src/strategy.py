@@ -45,6 +45,7 @@ class Signal:
     atr: float
     reason: str
     confluence_score: int = 0  # S/D zone confluence (0-3 TFs overlapping)
+    condition_pct: float = 1.0  # fraction of conditions met (0.75 or 1.0)
 
 
 def detect_htf_bias(df_htf: pd.DataFrame) -> HTFBias:
@@ -191,40 +192,24 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
     vol_sma = row["volume_sma"]
     atr = row["atr"]
 
-    # Wick touches BB lower, close inside BB, wick >= 15%, bullish candle
     candle_range = high - low
     lower_wick = min(close, opn) - low
     wick_pct = lower_wick / candle_range if candle_range > 0 else 0
+
+    # ── Mandatory conditions (all must pass) ──
     touch_lower = low <= bb_lower * (1 + cfg.bb_touch_pct / 100)
     close_inside = close > bb_lower
-    wick_ok = wick_pct >= 0.15
-    bullish = close > opn
-
-    # RSI Hayden zones — threshold adjusted by H4 bias
-    oversold_threshold, _ = get_rsi_thresholds(cfg, bias)
-    rsi_oversold = rsi <= oversold_threshold
-    volume_ok = volume > vol_sma * cfg.volume_range_mult
-
-    if not (touch_lower and close_inside and wick_ok and bullish and rsi_oversold and volume_ok):
+    if not (touch_lower and close_inside):
         reasons = []
         if not touch_lower:
             dist = (low - bb_lower) / bb_lower * 100
             reasons.append(f"BB {dist:.1f}% away")
         if touch_lower and not close_inside:
             reasons.append("close below BB")
-        if touch_lower and not wick_ok:
-            reasons.append(f"wick {wick_pct:.0%} < 15%")
-        if touch_lower and not bullish:
-            reasons.append("bearish candle")
-        if not rsi_oversold:
-            reasons.append(f"RSI {rsi:.0f} > {oversold_threshold}")
-        if not volume_ok:
-            ratio = volume / vol_sma if vol_sma > 0 else 0
-            reasons.append(f"vol {ratio:.1f}x < {cfg.volume_range_mult}x")
         logger.debug("SKIP LONG %s: %s", symbol, " | ".join(reasons))
         return None
 
-    # Demand zone confluence scoring — count TFs with overlapping zones
+    # Demand zone confluence — mandatory
     z_15m = zones_15m if zones_15m is not None else find_demand_zones(df)
     z_h1 = zones_h1 or []
     z_h4 = zones_h4 or []
@@ -233,13 +218,39 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
         logger.debug("SKIP LONG %s: no demand zone near %.2f", symbol, low)
         return None
 
-    entry = close
-    if bb_mid <= entry:
+    # BB mid room — mandatory
+    if bb_mid <= close:
         logger.debug("SKIP LONG %s: price above BB mid (no room for TP)", symbol)
         return None
-    sl = entry - cfg.main_sl_ranging_atr_mult * atr
-    tp1 = entry + (bb_mid - entry) * 0.50  # 50% distance to BB mid
 
+    # ── Optional conditions (score 4/4 = full, 2+/4 = 75%) ──
+    oversold_threshold, _ = get_rsi_thresholds(cfg, bias)
+    opt_wick = wick_pct >= 0.15
+    opt_bullish = close > opn
+    opt_rsi = rsi <= oversold_threshold
+    opt_vol = volume > vol_sma * cfg.volume_range_mult if vol_sma > 0 else True
+
+    opt_count = sum([opt_wick, opt_bullish, opt_rsi, opt_vol])
+    if opt_count < 2:
+        reasons = []
+        if not opt_wick:
+            reasons.append(f"wick {wick_pct:.0%} < 15%")
+        if not opt_bullish:
+            reasons.append("bearish candle")
+        if not opt_rsi:
+            reasons.append(f"RSI {rsi:.0f} > {oversold_threshold}")
+        if not opt_vol:
+            ratio = volume / vol_sma if vol_sma > 0 else 0
+            reasons.append(f"vol {ratio:.1f}x < {cfg.volume_range_mult}x")
+        logger.debug("SKIP LONG %s: %s (%d/4 optional)", symbol, " | ".join(reasons), opt_count)
+        return None
+
+    condition_pct = 1.0 if opt_count == 4 else 0.75
+    entry = close
+    sl = entry - cfg.main_sl_ranging_atr_mult * atr
+    tp1 = entry + (bb_mid - entry) * 0.50
+
+    tag = "100%" if opt_count == 4 else f"75%({opt_count}/4)"
     return Signal(
         type=SignalType.LONG,
         source=SignalSource.MAIN,
@@ -249,8 +260,9 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
         tp1_price=tp1,
         tp2_price=None,
         atr=atr,
-        reason=f"RANGE LONG | BB wick {wick_pct:.0%} + RSI {rsi:.0f} + demand x{confluence}",
+        reason=f"RANGE LONG | BB wick {wick_pct:.0%} + RSI {rsi:.0f} + demand x{confluence} [{tag}]",
         confluence_score=confluence,
+        condition_pct=condition_pct,
     )
 
 
@@ -270,40 +282,24 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
     vol_sma = row["volume_sma"]
     atr = row["atr"]
 
-    # Wick touches BB upper, close inside BB, wick >= 15%, bearish candle
     candle_range = high - low
     upper_wick = high - max(close, opn)
     wick_pct = upper_wick / candle_range if candle_range > 0 else 0
+
+    # ── Mandatory conditions (all must pass) ──
     touch_upper = high >= bb_upper * (1 - cfg.bb_touch_pct / 100)
     close_inside = close < bb_upper
-    wick_ok = wick_pct >= 0.15
-    bearish = close < opn
-
-    # RSI Hayden zones — threshold adjusted by H4 bias
-    _, overbought_threshold = get_rsi_thresholds(cfg, bias)
-    rsi_overbought = rsi >= overbought_threshold
-    volume_ok = volume > vol_sma * cfg.volume_range_mult
-
-    if not (touch_upper and close_inside and wick_ok and bearish and rsi_overbought and volume_ok):
+    if not (touch_upper and close_inside):
         reasons = []
         if not touch_upper:
             dist = (bb_upper - high) / bb_upper * 100
             reasons.append(f"BB {dist:.1f}% away")
         if touch_upper and not close_inside:
             reasons.append("close above BB")
-        if touch_upper and not wick_ok:
-            reasons.append(f"wick {wick_pct:.0%} < 15%")
-        if touch_upper and not bearish:
-            reasons.append("bullish candle")
-        if not rsi_overbought:
-            reasons.append(f"RSI {rsi:.0f} < {overbought_threshold}")
-        if not volume_ok:
-            ratio = volume / vol_sma if vol_sma > 0 else 0
-            reasons.append(f"vol {ratio:.1f}x < {cfg.volume_range_mult}x")
         logger.debug("SKIP SHORT %s: %s", symbol, " | ".join(reasons))
         return None
 
-    # Supply zone confluence scoring — count TFs with overlapping zones
+    # Supply zone confluence — mandatory
     z_15m = zones_15m if zones_15m is not None else find_supply_zones(df)
     z_h1 = zones_h1 or []
     z_h4 = zones_h4 or []
@@ -312,13 +308,39 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
         logger.debug("SKIP SHORT %s: no supply zone near %.2f", symbol, high)
         return None
 
-    entry = close
-    if bb_mid >= entry:
+    # BB mid room — mandatory
+    if bb_mid >= close:
         logger.debug("SKIP SHORT %s: price below BB mid (no room for TP)", symbol)
         return None
-    sl = entry + cfg.main_sl_ranging_atr_mult * atr
-    tp1 = entry - (entry - bb_mid) * 0.50  # 50% distance to BB mid
 
+    # ── Optional conditions (score 4/4 = full, 2+/4 = 75%) ──
+    _, overbought_threshold = get_rsi_thresholds(cfg, bias)
+    opt_wick = wick_pct >= 0.15
+    opt_bearish = close < opn
+    opt_rsi = rsi >= overbought_threshold
+    opt_vol = volume > vol_sma * cfg.volume_range_mult if vol_sma > 0 else True
+
+    opt_count = sum([opt_wick, opt_bearish, opt_rsi, opt_vol])
+    if opt_count < 2:
+        reasons = []
+        if not opt_wick:
+            reasons.append(f"wick {wick_pct:.0%} < 15%")
+        if not opt_bearish:
+            reasons.append("bullish candle")
+        if not opt_rsi:
+            reasons.append(f"RSI {rsi:.0f} < {overbought_threshold}")
+        if not opt_vol:
+            ratio = volume / vol_sma if vol_sma > 0 else 0
+            reasons.append(f"vol {ratio:.1f}x < {cfg.volume_range_mult}x")
+        logger.debug("SKIP SHORT %s: %s (%d/4 optional)", symbol, " | ".join(reasons), opt_count)
+        return None
+
+    condition_pct = 1.0 if opt_count == 4 else 0.75
+    entry = close
+    sl = entry + cfg.main_sl_ranging_atr_mult * atr
+    tp1 = entry - (entry - bb_mid) * 0.50
+
+    tag = "100%" if opt_count == 4 else f"75%({opt_count}/4)"
     return Signal(
         type=SignalType.SHORT,
         source=SignalSource.MAIN,
@@ -328,8 +350,9 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
         tp1_price=tp1,
         tp2_price=None,
         atr=atr,
-        reason=f"RANGE SHORT | BB wick {wick_pct:.0%} + RSI {rsi:.0f} + supply x{confluence}",
+        reason=f"RANGE SHORT | BB wick {wick_pct:.0%} + RSI {rsi:.0f} + supply x{confluence} [{tag}]",
         confluence_score=confluence,
+        condition_pct=condition_pct,
     )
 
 
@@ -450,135 +473,126 @@ def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias,
         return None
 
     # ── LONG ──
-    long_bias_ok = bias in (HTFBias.BULLISH, HTFBias.NEUTRAL)
+    # Mandatory: ADX, DI, EMA order already checked above
     long_di_ok = plus_di > minus_di
     long_ema_ok = ema_f > ema_m
-    long_candle_ok = close > opn
-    long_rsi_ok = 40 < rsi < 70
-
-    if long_bias_ok and long_di_ok and long_ema_ok and long_candle_ok and long_rsi_ok:
-        # Wick ratio for long: lower wick / total range
+    if not (long_di_ok and long_ema_ok):
+        # Check short side instead
+        pass
+    else:
         lower_wick = min(close, opn) - low
         wick_pct = lower_wick / candle_range
-
         ema21_dist = (low - ema_m) / ema_m * 100 if ema_m > 0 else 99
         ema50_dist = (low - ema_s) / ema_s * 100 if ema_s > 0 else 99
 
-        # Layer 1: EMA21 touch + 40% wick rejection
-        if low <= ema_m * 1.002 and close > ema_m and wick_pct >= 0.4:
-            entry = ema_m
-            sl = ema_m - 1.5 * atr
-            tp = entry + 2.0 * (entry - sl)
-            return Signal(
-                type=SignalType.LONG, source=SignalSource.MAIN,
-                regime=Regime.TRENDING, entry_price=entry,
-                sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-                reason=f"PB LONG | EMA21 wick {wick_pct:.0%} ADX {adx:.0f}",
-            )
+        # Mandatory: EMA touch + close above EMA
+        ema_level = None
+        ema_label = ""
+        if low <= ema_m * 1.002 and close > ema_m:
+            ema_level, ema_label = ema_m, "EMA21"
+        elif ema_s > 0 and low <= ema_s * 1.002 and close > ema_s:
+            ema_level, ema_label = ema_s, "EMA50"
 
-        # Layer 2: EMA50 touch + 40% wick rejection
-        if ema_s > 0 and low <= ema_s * 1.002 and close > ema_s and wick_pct >= 0.4:
-            entry = ema_s
-            sl = ema_s - 1.5 * atr
-            tp = entry + 2.0 * (entry - sl)
-            return Signal(
-                type=SignalType.LONG, source=SignalSource.MAIN,
-                regime=Regime.TRENDING, entry_price=entry,
-                sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-                reason=f"PB LONG | EMA50 wick {wick_pct:.0%} ADX {adx:.0f}",
-            )
+        if ema_level is not None:
+            # Optional conditions (4): bias, wick, RSI, candle direction
+            opt_bias = bias in (HTFBias.BULLISH, HTFBias.NEUTRAL)
+            opt_wick = wick_pct >= 0.4
+            opt_rsi = 40 < rsi < 70
+            opt_candle = close > opn
+            opt_count = sum([opt_bias, opt_wick, opt_rsi, opt_candle])
 
-        # Log why pullback didn't trigger
-        reasons = []
-        if ema21_dist > 0.2:
-            reasons.append(f"EMA21 {ema21_dist:.1f}% away")
-        elif wick_pct < 0.4:
-            reasons.append(f"EMA21 touch but wick {wick_pct:.0%} < 40%")
-        if ema50_dist > 0.2:
-            reasons.append(f"EMA50 {ema50_dist:.1f}% away")
-        elif wick_pct < 0.4:
-            reasons.append(f"EMA50 touch but wick {wick_pct:.0%} < 40%")
-        logger.debug("SKIP PB LONG %s: %s", symbol, " | ".join(reasons))
-
-    elif adx >= cfg.adx_min:
-        # Log which trending precondition failed
-        reasons = []
-        if not long_bias_ok:
-            reasons.append(f"bias={bias.value}")
-        if not long_di_ok:
-            reasons.append(f"+DI {plus_di:.0f} <= -DI {minus_di:.0f}")
-        if not long_ema_ok:
-            reasons.append(f"EMA9 < EMA21")
-        if not long_candle_ok:
-            reasons.append("bearish candle")
-        if not long_rsi_ok:
-            reasons.append(f"RSI {rsi:.0f} out 40-70")
-        logger.debug("SKIP PB LONG %s: %s", symbol, " | ".join(reasons))
+            if opt_count >= 2:
+                condition_pct = 1.0 if opt_count == 4 else 0.75
+                entry = ema_level
+                sl = ema_level - 1.5 * atr
+                tp = entry + 2.0 * (entry - sl)
+                tag = "100%" if opt_count == 4 else f"75%({opt_count}/4)"
+                return Signal(
+                    type=SignalType.LONG, source=SignalSource.MAIN,
+                    regime=Regime.TRENDING, entry_price=entry,
+                    sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
+                    reason=f"PB LONG | {ema_label} wick {wick_pct:.0%} ADX {adx:.0f} [{tag}]",
+                    condition_pct=condition_pct,
+                )
+            else:
+                reasons = []
+                if not opt_bias:
+                    reasons.append(f"bias={bias.value}")
+                if not opt_wick:
+                    reasons.append(f"wick {wick_pct:.0%} < 40%")
+                if not opt_rsi:
+                    reasons.append(f"RSI {rsi:.0f} out 40-70")
+                if not opt_candle:
+                    reasons.append("bearish candle")
+                logger.debug("SKIP PB LONG %s: %s (%d/4 optional)", symbol, " | ".join(reasons), opt_count)
+        else:
+            reasons = []
+            if ema21_dist > 0.2:
+                reasons.append(f"EMA21 {ema21_dist:.1f}% away")
+            elif wick_pct < 0.4:
+                reasons.append(f"EMA21 touch but close below")
+            if ema50_dist > 0.2:
+                reasons.append(f"EMA50 {ema50_dist:.1f}% away")
+            logger.debug("SKIP PB LONG %s: %s", symbol, " | ".join(reasons))
 
     # ── SHORT ──
-    short_bias_ok = bias in (HTFBias.BEARISH, HTFBias.NEUTRAL)
     short_di_ok = minus_di > plus_di
     short_ema_ok = ema_f < ema_m
-    short_candle_ok = close < opn
-    short_rsi_ok = 30 < rsi < 60
-
-    if short_bias_ok and short_di_ok and short_ema_ok and short_candle_ok and short_rsi_ok:
-        # Wick ratio for short: upper wick / total range
+    if not (short_di_ok and short_ema_ok):
+        pass
+    else:
         upper_wick = high - max(close, opn)
         wick_pct = upper_wick / candle_range
-
         ema21_dist = (ema_m - high) / ema_m * 100 if ema_m > 0 else 99
         ema50_dist = (ema_s - high) / ema_s * 100 if ema_s > 0 else 99
 
-        # Layer 1: EMA21 touch + 40% wick rejection
-        if high >= ema_m * 0.998 and close < ema_m and wick_pct >= 0.4:
-            entry = ema_m
-            sl = ema_m + 1.5 * atr
-            tp = entry - 2.0 * (sl - entry)
-            return Signal(
-                type=SignalType.SHORT, source=SignalSource.MAIN,
-                regime=Regime.TRENDING, entry_price=entry,
-                sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-                reason=f"PB SHORT | EMA21 wick {wick_pct:.0%} ADX {adx:.0f}",
-            )
+        # Mandatory: EMA touch + close below EMA
+        ema_level = None
+        ema_label = ""
+        if high >= ema_m * 0.998 and close < ema_m:
+            ema_level, ema_label = ema_m, "EMA21"
+        elif ema_s > 0 and high >= ema_s * 0.998 and close < ema_s:
+            ema_level, ema_label = ema_s, "EMA50"
 
-        # Layer 2: EMA50 touch + 40% wick rejection
-        if ema_s > 0 and high >= ema_s * 0.998 and close < ema_s and wick_pct >= 0.4:
-            entry = ema_s
-            sl = ema_s + 1.5 * atr
-            tp = entry - 2.0 * (sl - entry)
-            return Signal(
-                type=SignalType.SHORT, source=SignalSource.MAIN,
-                regime=Regime.TRENDING, entry_price=entry,
-                sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-                reason=f"PB SHORT | EMA50 wick {wick_pct:.0%} ADX {adx:.0f}",
-            )
+        if ema_level is not None:
+            # Optional conditions (4): bias, wick, RSI, candle direction
+            opt_bias = bias in (HTFBias.BEARISH, HTFBias.NEUTRAL)
+            opt_wick = wick_pct >= 0.4
+            opt_rsi = 30 < rsi < 60
+            opt_candle = close < opn
+            opt_count = sum([opt_bias, opt_wick, opt_rsi, opt_candle])
 
-        # Log why pullback didn't trigger
-        reasons = []
-        if ema21_dist > 0.2:
-            reasons.append(f"EMA21 {ema21_dist:.1f}% away")
-        elif wick_pct < 0.4:
-            reasons.append(f"EMA21 touch but wick {wick_pct:.0%} < 40%")
-        if ema50_dist > 0.2:
-            reasons.append(f"EMA50 {ema50_dist:.1f}% away")
-        elif wick_pct < 0.4:
-            reasons.append(f"EMA50 touch but wick {wick_pct:.0%} < 40%")
-        logger.debug("SKIP PB SHORT %s: %s", symbol, " | ".join(reasons))
-
-    elif adx >= cfg.adx_min and not long_bias_ok:
-        reasons = []
-        if not short_bias_ok:
-            reasons.append(f"bias={bias.value}")
-        if not short_di_ok:
-            reasons.append(f"-DI {minus_di:.0f} <= +DI {plus_di:.0f}")
-        if not short_ema_ok:
-            reasons.append(f"EMA9 > EMA21")
-        if not short_candle_ok:
-            reasons.append("bullish candle")
-        if not short_rsi_ok:
-            reasons.append(f"RSI {rsi:.0f} out 30-60")
-        logger.debug("SKIP PB SHORT %s: %s", symbol, " | ".join(reasons))
+            if opt_count >= 2:
+                condition_pct = 1.0 if opt_count == 4 else 0.75
+                entry = ema_level
+                sl = ema_level + 1.5 * atr
+                tp = entry - 2.0 * (sl - entry)
+                tag = "100%" if opt_count == 4 else f"75%({opt_count}/4)"
+                return Signal(
+                    type=SignalType.SHORT, source=SignalSource.MAIN,
+                    regime=Regime.TRENDING, entry_price=entry,
+                    sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
+                    reason=f"PB SHORT | {ema_label} wick {wick_pct:.0%} ADX {adx:.0f} [{tag}]",
+                    condition_pct=condition_pct,
+                )
+            else:
+                reasons = []
+                if not opt_bias:
+                    reasons.append(f"bias={bias.value}")
+                if not opt_wick:
+                    reasons.append(f"wick {wick_pct:.0%} < 40%")
+                if not opt_rsi:
+                    reasons.append(f"RSI {rsi:.0f} out 30-60")
+                if not opt_candle:
+                    reasons.append("bullish candle")
+                logger.debug("SKIP PB SHORT %s: %s (%d/4 optional)", symbol, " | ".join(reasons), opt_count)
+        else:
+            reasons = []
+            if ema21_dist > 0.2:
+                reasons.append(f"EMA21 {ema21_dist:.1f}% away")
+            if ema50_dist > 0.2:
+                reasons.append(f"EMA50 {ema50_dist:.1f}% away")
+            logger.debug("SKIP PB SHORT %s: %s", symbol, " | ".join(reasons))
 
     return None
 
