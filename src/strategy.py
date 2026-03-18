@@ -199,13 +199,18 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
     # ── Mandatory conditions (all must pass) ──
     touch_lower = low <= bb_lower * (1 + cfg.bb_touch_pct / 100)
     close_inside = close > bb_lower
-    if not (touch_lower and close_inside):
+    # Anti-breakout: previous candle must also be above BB lower (not a fresh breakdown)
+    prev_row = df.iloc[-3] if len(df) >= 4 else row
+    prev_above_bb = prev_row["close"] > prev_row["bb_lower"]
+    if not (touch_lower and close_inside and prev_above_bb):
         reasons = []
         if not touch_lower:
             dist = (low - bb_lower) / bb_lower * 100
             reasons.append(f"BB {dist:.1f}% away")
         if touch_lower and not close_inside:
             reasons.append("close below BB")
+        if touch_lower and close_inside and not prev_above_bb:
+            reasons.append("breakdown — prev candle below BB")
         logger.debug("SKIP LONG %s: %s", symbol, " | ".join(reasons))
         return None
 
@@ -289,13 +294,18 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
     # ── Mandatory conditions (all must pass) ──
     touch_upper = high >= bb_upper * (1 - cfg.bb_touch_pct / 100)
     close_inside = close < bb_upper
-    if not (touch_upper and close_inside):
+    # Anti-breakout: previous candle must also be below BB upper (not a fresh breakout)
+    prev_row = df.iloc[-3] if len(df) >= 4 else row
+    prev_below_bb = prev_row["close"] < prev_row["bb_upper"]
+    if not (touch_upper and close_inside and prev_below_bb):
         reasons = []
         if not touch_upper:
             dist = (bb_upper - high) / bb_upper * 100
             reasons.append(f"BB {dist:.1f}% away")
         if touch_upper and not close_inside:
             reasons.append("close above BB")
+        if touch_upper and close_inside and not prev_below_bb:
+            reasons.append("breakout — prev candle above BB")
         logger.debug("SKIP SHORT %s: %s", symbol, " | ".join(reasons))
         return None
 
