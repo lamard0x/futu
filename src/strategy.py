@@ -229,7 +229,7 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
         logger.debug("SKIP LONG %s: price above BB mid (no room for TP)", symbol)
         return None
 
-    # ── Optional conditions (score 4/4 = full, 2+/4 = 75%) ──
+    # ── Optional conditions (4/4 = full, 3/4 = 90% → 0.75x vol) ──
     oversold_threshold, _ = get_rsi_thresholds(cfg, bias)
     opt_wick = wick_pct >= 0.15
     opt_bullish = close > opn
@@ -237,7 +237,7 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
     opt_vol = volume > vol_sma * cfg.volume_range_mult if vol_sma > 0 else True
 
     opt_count = sum([opt_wick, opt_bullish, opt_rsi, opt_vol])
-    if opt_count < 2:
+    if opt_count < 3:
         reasons = []
         if not opt_wick:
             reasons.append(f"wick {wick_pct:.0%} < 15%")
@@ -256,7 +256,7 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
     sl = entry - cfg.main_sl_ranging_atr_mult * atr
     tp1 = entry + (bb_mid - entry) * 0.50
 
-    tag = "100%" if opt_count == 4 else f"75%({opt_count}/4)"
+    tag = "100%" if opt_count == 4 else f"90%({opt_count}/4)"
     return Signal(
         type=SignalType.LONG,
         source=SignalSource.MAIN,
@@ -325,7 +325,7 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
         logger.debug("SKIP SHORT %s: price below BB mid (no room for TP)", symbol)
         return None
 
-    # ── Optional conditions (score 4/4 = full, 2+/4 = 75%) ──
+    # ── Optional conditions (4/4 = full, 3/4 = 90% → 0.75x vol) ──
     _, overbought_threshold = get_rsi_thresholds(cfg, bias)
     opt_wick = wick_pct >= 0.15
     opt_bearish = close < opn
@@ -333,7 +333,7 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
     opt_vol = volume > vol_sma * cfg.volume_range_mult if vol_sma > 0 else True
 
     opt_count = sum([opt_wick, opt_bearish, opt_rsi, opt_vol])
-    if opt_count < 2:
+    if opt_count < 3:
         reasons = []
         if not opt_wick:
             reasons.append(f"wick {wick_pct:.0%} < 15%")
@@ -352,7 +352,7 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
     sl = entry + cfg.main_sl_ranging_atr_mult * atr
     tp1 = entry - (entry - bb_mid) * 0.50
 
-    tag = "100%" if opt_count == 4 else f"75%({opt_count}/4)"
+    tag = "100%" if opt_count == 4 else f"90%({opt_count}/4)"
     return Signal(
         type=SignalType.SHORT,
         source=SignalSource.MAIN,
