@@ -14,7 +14,7 @@ class SwingConfig:
     hold_days_max: int = 14
     scan_hours_utc: list = field(default_factory=lambda: [0, 6, 12, 18])  # every 6h
     scan_minute_utc: int = 5
-    top_symbols: int = 20            # top 20 by volume per exchange
+    top_symbols: int = 50            # top 50 by volume per exchange
     rate_limit_delay: float = 0.3    # seconds between API calls
     exchanges: list = field(default_factory=lambda: [
         "binance", "okx", "bybit",
