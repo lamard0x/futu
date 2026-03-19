@@ -1,5 +1,5 @@
 //@version=5
-indicator("FUTU Scalper v2", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+indicator("FUTU Scalper v3", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
 
 // ── Inputs ──
 ema_fast_len  = input.int(9, "EMA Fast")
@@ -84,17 +84,24 @@ vol_sma = ta.sma(volume, vol_sma_len)
 is_trending = adx_val >= adx_threshold
 is_ranging  = not is_trending
 
-// ── HTF Bias (H4) — simplified EMA9 vs EMA21 ──
-htf_ema9  = request.security(syminfo.tickerid, "240", ta.ema(close, ema_fast_len))
-htf_ema21 = request.security(syminfo.tickerid, "240", ta.ema(close, ema_mid_len))
+// ── HTF Bias — H1 for ranging, H4 for trending ──
+h1_ema9  = request.security(syminfo.tickerid, "60",  ta.ema(close, ema_fast_len))
+h1_ema21 = request.security(syminfo.tickerid, "60",  ta.ema(close, ema_mid_len))
+h4_ema9  = request.security(syminfo.tickerid, "240", ta.ema(close, ema_fast_len))
+h4_ema21 = request.security(syminfo.tickerid, "240", ta.ema(close, ema_mid_len))
 
-htf_bullish = htf_ema9 > htf_ema21
-htf_bearish = htf_ema9 < htf_ema21
-htf_neutral = not htf_bullish and not htf_bearish
+h1_bullish = h1_ema9 > h1_ema21
+h1_bearish = h1_ema9 < h1_ema21
+h4_bullish = h4_ema9 > h4_ema21
+h4_bearish = h4_ema9 < h4_ema21
 
-// RSI Hayden thresholds based on H4 bias
-rsi_os = htf_bullish ? rsi_bull_os : htf_bearish ? rsi_bear_os : rsi_neut_os
-rsi_ob = htf_bullish ? rsi_bull_ob : htf_bearish ? rsi_bear_ob : rsi_neut_ob
+// RSI Hayden thresholds based on H1 bias (ranging uses H1)
+rsi_os = h1_bullish ? rsi_bull_os : h1_bearish ? rsi_bear_os : rsi_neut_os
+rsi_ob = h1_bullish ? rsi_bull_ob : h1_bearish ? rsi_bear_ob : rsi_neut_ob
+
+// Counter-trend detection (ranging)
+r_long_counter_trend  = h1_bearish  // LONG in bearish H1 = counter-trend
+r_short_counter_trend = h1_bullish  // SHORT in bullish H1 = counter-trend
 
 // ── Candle metrics (closed candle = [1]) ──
 c_close = close[1]
@@ -216,10 +223,10 @@ if show_zones and barstate.islast
 // ═══════════════════════════════════════════════════
 
 // Mandatory conditions (all must pass)
-// BB touch + close 10% inside BB range + anti-breakout (prev candle inside BB) + zone + room for TP
+// BB touch + close 25% inside BB range + anti-breakout (prev candle inside BB) + zone + room for TP
 bb_w = bb_upper[1] - bb_lower[1]
-r_long_mandatory  = c_low <= bb_lower[1] * (1 + bb_touch_pct / 100) and c_close > bb_lower[1] + bb_w * 0.10 and close[2] > low[2] and in_demand and c_close < bb_basis[1]
-r_short_mandatory = c_high >= bb_upper[1] * (1 - bb_touch_pct / 100) and c_close < bb_upper[1] - bb_w * 0.10 and close[2] < high[2] and in_supply and c_close > bb_basis[1]
+r_long_mandatory  = c_low <= bb_lower[1] * (1 + bb_touch_pct / 100) and c_close > bb_lower[1] + bb_w * 0.25 and close[2] > low[2] and in_demand and c_close < bb_basis[1]
+r_short_mandatory = c_high >= bb_upper[1] * (1 - bb_touch_pct / 100) and c_close < bb_upper[1] - bb_w * 0.25 and close[2] < high[2] and in_supply and c_close > bb_basis[1]
 // Anti-breakout: prev candle (index 2 = closed-1) must be inside BB
 r_long_anti_brk  = close[2] > ta.sma(close, bb_period)[2] - bb_std * ta.stdev(close, bb_period)[2]
 r_short_anti_brk = close[2] < ta.sma(close, bb_period)[2] + bb_std * ta.stdev(close, bb_period)[2]
@@ -239,13 +246,16 @@ r_short_opt_rsi    = rsi_val[1] >= rsi_ob
 r_short_opt_vol    = volume[1] > vol_sma[1] * vol_range_mult
 r_short_opt_count  = (r_short_opt_wick ? 1 : 0) + (r_short_opt_candle ? 1 : 0) + (r_short_opt_rsi ? 1 : 0) + (r_short_opt_vol ? 1 : 0)
 
-// Signal: 4/4 = full (100%), 3/4 = partial (90% → 0.75x vol), <3 = skip
+// Signal: counter-trend needs 4/4, with-trend/neutral needs 3/4
+r_long_min_opt  = r_long_counter_trend  ? 4 : 3
+r_short_min_opt = r_short_counter_trend ? 4 : 3
+
 range_long_full    = r_long_mandatory  and r_long_opt_count  == 4
-range_long_partial = r_long_mandatory  and r_long_opt_count  == 3
+range_long_partial = r_long_mandatory  and r_long_opt_count  >= r_long_min_opt and r_long_opt_count < 4
 range_long         = range_long_full or (range_long_partial and show_75pct)
 
 range_short_full    = r_short_mandatory and r_short_opt_count == 4
-range_short_partial = r_short_mandatory and r_short_opt_count == 3
+range_short_partial = r_short_mandatory and r_short_opt_count >= r_short_min_opt and r_short_opt_count < 4
 range_short         = range_short_full or (range_short_partial and show_75pct)
 
 // ═══════════════════════════════════════════════════
@@ -266,14 +276,14 @@ t_short_ema21_touch = c_high >= ema21[1] * 0.998 and c_close < ema21[1]
 t_short_ema50_touch = c_high >= ema50[1] * 0.998 and c_close < ema50[1]
 t_short_mandatory = t_long_adx and t_short_di and t_short_ema and (t_short_ema21_touch or t_short_ema50_touch)
 
-// Optional: H4 bias, wick >= 40%, RSI range, candle direction
-t_long_opt_bias   = htf_bullish or htf_neutral
+// Optional: H4 bias (trending uses H4), wick >= 40%, RSI range, candle direction
+t_long_opt_bias   = h4_bullish or (not h4_bearish and not h4_bullish)
 t_long_opt_wick   = c_lower_wick_pct >= 0.4
 t_long_opt_rsi    = rsi_val[1] > 40 and rsi_val[1] < 70
 t_long_opt_candle = c_close > c_open
 t_long_opt_count  = (t_long_opt_bias ? 1 : 0) + (t_long_opt_wick ? 1 : 0) + (t_long_opt_rsi ? 1 : 0) + (t_long_opt_candle ? 1 : 0)
 
-t_short_opt_bias   = htf_bearish or htf_neutral
+t_short_opt_bias   = h4_bearish or (not h4_bearish and not h4_bullish)
 t_short_opt_wick   = c_upper_wick_pct >= 0.4
 t_short_opt_rsi    = rsi_val[1] > 30 and rsi_val[1] < 60
 t_short_opt_candle = c_close < c_open
@@ -324,44 +334,49 @@ bgcolor(show_regime and is_trending ? color.new(#2196f3, 95) : show_regime and i
 if (long_full or long_partial) and show_signals
     is_range = range_long_full or range_long_partial
     opt_n = is_range ? r_long_opt_count : t_long_opt_count
-    lbl_text = (is_range ? "R" : "T") + " " + str.tostring(opt_n) + "/4"
+    ct_tag = is_range and r_long_counter_trend ? " CT" : ""
+    lbl_text = (is_range ? "R" : "T") + " " + str.tostring(opt_n) + "/4" + ct_tag
     lbl_clr = opt_n == 4 ? #00ff88 : #ffeb3b
     label.new(bar_index, c_low, lbl_text, style=label.style_label_up, color=color.new(lbl_clr, 70), textcolor=color.white, size=size.tiny)
 
 if (short_full or short_partial) and show_signals
     is_range = range_short_full or range_short_partial
     opt_n = is_range ? r_short_opt_count : t_short_opt_count
-    lbl_text = (is_range ? "R" : "T") + " " + str.tostring(opt_n) + "/4"
+    ct_tag = is_range and r_short_counter_trend ? " CT" : ""
+    lbl_text = (is_range ? "R" : "T") + " " + str.tostring(opt_n) + "/4" + ct_tag
     lbl_clr = opt_n == 4 ? #ff4466 : #ffeb3b
     label.new(bar_index, c_high, lbl_text, style=label.style_label_down, color=color.new(lbl_clr, 70), textcolor=color.white, size=size.tiny)
 
 // ── Info Table ──
-var table info = table.new(position.top_right, 2, 9, bgcolor=color.new(#1a1a2e, 20), border_width=1)
+var table info = table.new(position.top_right, 2, 10, bgcolor=color.new(#1a1a2e, 20), border_width=1)
 
 if barstate.islast
     regime_text = is_trending ? "TREND" : "RANGE"
-    bias_text = htf_bullish ? "BULL" : htf_bearish ? "BEAR" : "NEUTRAL"
+    h1_text = h1_bullish ? "BULL" : h1_bearish ? "BEAR" : "NEUTRAL"
+    h4_text = h4_bullish ? "BULL" : h4_bearish ? "BEAR" : "NEUTRAL"
 
     table.cell(info, 0, 0, "Regime", text_color=color.gray, text_size=size.small)
     table.cell(info, 1, 0, regime_text, text_color=is_trending ? #2196f3 : #ff9800, text_size=size.small)
-    table.cell(info, 0, 1, "H4 Bias", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 1, bias_text, text_color=htf_bullish ? #00ff88 : htf_bearish ? #ff4466 : color.gray, text_size=size.small)
-    table.cell(info, 0, 2, "ADX", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 2, str.tostring(adx_val, "#.0"), text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 3, "RSI", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 3, str.tostring(rsi_val, "#.0"), text_color=rsi_val > rsi_ob ? #ff4466 : rsi_val < rsi_os ? #00ff88 : color.white, text_size=size.small)
-    table.cell(info, 0, 4, "RSI Zone", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 4, str.tostring(rsi_os, "#") + "/" + str.tostring(rsi_ob, "#"), text_color=#ffeb3b, text_size=size.small)
-    table.cell(info, 0, 5, "+DI/-DI", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 5, str.tostring(di_plus, "#.0") + "/" + str.tostring(di_minus, "#.0"), text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 6, "ATR", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 6, str.tostring(atr_val, "#.1"), text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 7, "Vol", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 7, str.tostring(volume / vol_sma, "#.1") + "x", text_color=volume > vol_sma ? #00ff88 : #ff4466, text_size=size.small)
-    table.cell(info, 0, 8, "D/S Zone", text_color=color.gray, text_size=size.small)
+    table.cell(info, 0, 1, "H1 Bias", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 1, h1_text, text_color=h1_bullish ? #00ff88 : h1_bearish ? #ff4466 : color.gray, text_size=size.small)
+    table.cell(info, 0, 2, "H4 Bias", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 2, h4_text, text_color=h4_bullish ? #00ff88 : h4_bearish ? #ff4466 : color.gray, text_size=size.small)
+    table.cell(info, 0, 3, "ADX", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 3, str.tostring(adx_val, "#.0"), text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 4, "RSI", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 4, str.tostring(rsi_val, "#.0"), text_color=rsi_val > rsi_ob ? #ff4466 : rsi_val < rsi_os ? #00ff88 : color.white, text_size=size.small)
+    table.cell(info, 0, 5, "RSI Zone", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 5, str.tostring(rsi_os, "#") + "/" + str.tostring(rsi_ob, "#"), text_color=#ffeb3b, text_size=size.small)
+    table.cell(info, 0, 6, "+DI/-DI", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 6, str.tostring(di_plus, "#.0") + "/" + str.tostring(di_minus, "#.0"), text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 7, "ATR", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 7, str.tostring(atr_val, "#.1"), text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 8, "Vol", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 8, str.tostring(volume / vol_sma, "#.1") + "x", text_color=volume > vol_sma ? #00ff88 : #ff4466, text_size=size.small)
+    table.cell(info, 0, 9, "D/S Zone", text_color=color.gray, text_size=size.small)
     zone_text = in_demand ? "DEMAND" : in_supply ? "SUPPLY" : "-"
     zone_clr = in_demand ? #00ff88 : in_supply ? #ff4466 : color.gray
-    table.cell(info, 1, 8, zone_text, text_color=zone_clr, text_size=size.small)
+    table.cell(info, 1, 9, zone_text, text_color=zone_clr, text_size=size.small)
 
 // ── Alerts ──
 alertcondition(long_full,               "FUTU Long 100%",  "FUTU: LONG 100% signal")
