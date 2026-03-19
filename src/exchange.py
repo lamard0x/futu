@@ -255,7 +255,8 @@ class Exchange:
 
     async def _update_tp_sl_generic(self, tp_price, sl_price):
         """Update TP/SL on OKX — TP and SL are SEPARATE algo orders.
-        Trailing only cancels+replaces SL, never touches TP.
+        Set TP first (less likely to fail), then SL.
+        If SL fails because price already past SL, raise to trigger close.
         """
         try:
             position = await self.get_position()
@@ -266,19 +267,8 @@ class Exchange:
             close_side = "sell" if position["side"] == "long" else "buy"
             size = str(int(position["size"]))
 
-            if sl_price is not None:
-                # Cancel only SL algo orders, keep TP
-                await self._cancel_sl_orders()
-                await self.rate_limiter.acquire("create_order")
-                await self.exchange.private_post_trade_order_algo({
-                    "instId": inst_id, "tdMode": self.config.margin_mode,
-                    "side": close_side, "ordType": "conditional", "sz": size,
-                    "slTriggerPx": str(sl_price), "slOrdPx": "-1",
-                })
-                logger.info("SL set: %s", sl_price)
-
+            # Set TP first — rarely fails
             if tp_price is not None:
-                # Cancel only TP algo orders, keep SL
                 await self._cancel_tp_orders()
                 await self.rate_limiter.acquire("create_order")
                 await self.exchange.private_post_trade_order_algo({
@@ -287,6 +277,29 @@ class Exchange:
                     "tpTriggerPx": str(tp_price), "tpOrdPx": "-1",
                 })
                 logger.info("TP set: %s", tp_price)
+
+            # Set SL — may fail if price already past SL (error 51280)
+            if sl_price is not None:
+                await self._cancel_sl_orders()
+                try:
+                    await self.rate_limiter.acquire("create_order")
+                    await self.exchange.private_post_trade_order_algo({
+                        "instId": inst_id, "tdMode": self.config.margin_mode,
+                        "side": close_side, "ordType": "conditional", "sz": size,
+                        "slTriggerPx": str(sl_price), "slOrdPx": "-1",
+                    })
+                    logger.info("SL set: %s", sl_price)
+                except Exception as sl_err:
+                    err_str = str(sl_err)
+                    if "51280" in err_str:
+                        # SL trigger past current price — price already breached SL
+                        mark = float(position.get("markPrice") or 0)
+                        logger.warning(
+                            "SL rejected (51280): SL=%s mark=%s side=%s — price past SL",
+                            sl_price, mark, position["side"],
+                        )
+                        raise
+                    raise
 
         except Exception as e:
             logger.warning("Update TP/SL error: %s", e)

@@ -203,7 +203,15 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
     # Anti-breakout: previous candle must also be above BB lower (not a fresh breakdown)
     prev_row = df.iloc[-3] if len(df) >= 4 else row
     prev_above_bb = prev_row["close"] > prev_row["bb_lower"]
-    if not (touch_lower and close_inside and prev_above_bb):
+    # Anti-breakdown: if 2+ of last 3 closed candles were below BB lower, skip (sustained breakdown)
+    breakdown_count = 0
+    for i in range(-4, -1):  # 3 candles before current (closed candles)
+        if len(df) >= abs(i) + 1:
+            r = df.iloc[i]
+            if r["close"] < r["bb_lower"]:
+                breakdown_count += 1
+    sustained_breakdown = breakdown_count >= 2
+    if not (touch_lower and close_inside and prev_above_bb and not sustained_breakdown):
         reasons = []
         if not touch_lower:
             dist = (low - bb_lower) / bb_lower * 100
@@ -212,6 +220,8 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
             reasons.append("close below BB")
         if touch_lower and close_inside and not prev_above_bb:
             reasons.append("breakdown — prev candle below BB")
+        if touch_lower and close_inside and sustained_breakdown:
+            reasons.append(f"sustained breakdown ({breakdown_count}/3 candles below BB)")
         logger.debug("SKIP LONG %s: %s", symbol, " | ".join(reasons))
         return None
 
@@ -299,7 +309,15 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
     # Anti-breakout: previous candle must also be below BB upper (not a fresh breakout)
     prev_row = df.iloc[-3] if len(df) >= 4 else row
     prev_below_bb = prev_row["close"] < prev_row["bb_upper"]
-    if not (touch_upper and close_inside and prev_below_bb):
+    # Anti-breakout sustained: if 2+ of last 3 closed candles were above BB upper, skip
+    breakout_count = 0
+    for i in range(-4, -1):
+        if len(df) >= abs(i) + 1:
+            r = df.iloc[i]
+            if r["close"] > r["bb_upper"]:
+                breakout_count += 1
+    sustained_breakout = breakout_count >= 2
+    if not (touch_upper and close_inside and prev_below_bb and not sustained_breakout):
         reasons = []
         if not touch_upper:
             dist = (bb_upper - high) / bb_upper * 100
@@ -308,6 +326,8 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
             reasons.append("close above BB")
         if touch_upper and close_inside and not prev_below_bb:
             reasons.append("breakout — prev candle above BB")
+        if touch_upper and close_inside and sustained_breakout:
+            reasons.append(f"sustained breakout ({breakout_count}/3 candles above BB)")
         logger.debug("SKIP SHORT %s: %s", symbol, " | ".join(reasons))
         return None
 

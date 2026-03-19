@@ -3,6 +3,7 @@ import json
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from dotenv import load_dotenv
+from src.swing_config import SwingConfig
 
 load_dotenv()
 
@@ -149,6 +150,7 @@ class Config:
     timeframe: TimeframeConfig = field(default_factory=TimeframeConfig)
     funding: FundingConfig = field(default_factory=FundingConfig)
     webhook: WebhookConfig = field(default_factory=WebhookConfig)
+    swing: SwingConfig = field(default_factory=SwingConfig)
 
     def __post_init__(self):
         self._load_env()
@@ -167,6 +169,10 @@ class Config:
         self.webhook.secret = os.getenv("WEBHOOK_SECRET", "")
         self.funding.enabled = os.getenv("FUNDING_ENABLED", "false").lower() == "true"
         self.webhook.enabled = os.getenv("WEBHOOK_ENABLED", "false").lower() == "true"
+        self.swing.enabled = os.getenv("SWING_ENABLED", "true").lower() == "true"
+        swing_capital = os.getenv("SWING_CAPITAL")
+        if swing_capital:
+            self.swing.capital = float(swing_capital)
 
     def _load_overrides(self):
         if not OVERRIDE_PATH.exists():

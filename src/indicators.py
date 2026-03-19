@@ -109,6 +109,26 @@ def add_chandelier_exit(df: pd.DataFrame, period: int = 22, mult: float = 3.0) -
     return "chandelier_long", "chandelier_short"
 
 
+def calc_fibonacci_levels(df: pd.DataFrame, lookback: int = 50) -> dict:
+    """Calculate Fibonacci retracement levels from swing high/low."""
+    recent = df.tail(lookback)
+    swing_high = recent["high"].max()
+    swing_low = recent["low"].min()
+    diff = swing_high - swing_low
+    if diff <= 0:
+        return {}
+    return {
+        "swing_high": swing_high,
+        "swing_low": swing_low,
+        "fib_0236": swing_high - 0.236 * diff,
+        "fib_0382": swing_high - 0.382 * diff,
+        "fib_0500": swing_high - 0.500 * diff,
+        "fib_0618": swing_high - 0.618 * diff,
+        "fib_0660": swing_high - 0.660 * diff,
+        "fib_0786": swing_high - 0.786 * diff,
+    }
+
+
 def compute_all(candles: list[dict], cfg: IndicatorConfig) -> pd.DataFrame:
     df = build_dataframe(candles)
 

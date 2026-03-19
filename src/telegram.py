@@ -19,6 +19,7 @@ COMMANDS = [
     {"command": "bias", "description": "Current H4 bias all coins"},
     {"command": "chart", "description": "Chart with indicators (e.g. /chart BTC)"},
     {"command": "config", "description": "Show current config"},
+    {"command": "swing", "description": "Run swing scanner now"},
     {"command": "help", "description": "List all commands"},
 ]
 
@@ -160,6 +161,7 @@ class CommandListener:
             "stats": self._cmd_stats,
             "bias": self._cmd_bias,
             "config": self._cmd_config,
+            "swing": self._cmd_swing,
         }
         handler = handlers.get(cmd)
         if handler:
@@ -262,6 +264,13 @@ class CommandListener:
             f"Main TF: {cfg.timeframe.main_tf} | HTF: {cfg.timeframe.htf}"
         )
         await send_message(text)
+
+    async def _cmd_swing(self):
+        await send_message("🔍 <b>Running swing scan...</b>")
+        try:
+            await self.bot.run_swing_scan_manual()
+        except Exception as e:
+            await send_message(f"⚠️ Swing scan error: {e}")
 
     async def _cmd_chart(self, args: list[str]):
         from src.chart import generate_chart

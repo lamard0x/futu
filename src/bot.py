@@ -18,6 +18,7 @@ from src.telegram import CommandListener
 from src.funding import FundingArbitrage
 from src.webhook import WebhookServer
 from src.chart import generate_chart
+from src.swing_scanner import run_swing_scan, format_swing_telegram
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,6 +72,7 @@ class FutuBot:
         self.last_trending_fast_scan: datetime | None = None
         self.last_htf_scan: datetime | None = None
         self.last_symbol_refresh: datetime | None = None
+        self.last_swing_scan: datetime | None = None
         self.running: bool = False
 
     async def start(self):
@@ -274,6 +276,14 @@ class FutuBot:
                 logger.error("Trending pullback scan error: %s", e, exc_info=True)
             self.last_trending_fast_scan = now
 
+        # Daily swing scan
+        if self.config.swing.enabled and self._should_swing_scan(now):
+            try:
+                await self._run_swing_scan()
+            except Exception as e:
+                logger.error("Swing scan error: %s", e, exc_info=True)
+            self.last_swing_scan = now
+
     def _should_refresh_symbols(self, now: datetime) -> bool:
         if self.last_symbol_refresh is None:
             return True
@@ -304,6 +314,14 @@ class FutuBot:
             return True
         elapsed = (now - self.last_trending_scan).total_seconds()
         return elapsed >= self._tf_to_seconds(self.config.timeframe.trending_tf)
+
+    def _should_swing_scan(self, now: datetime) -> bool:
+        cfg = self.config.swing
+        if now.hour != cfg.scan_hour_utc or now.minute < cfg.scan_minute_utc:
+            return False
+        if self.last_swing_scan is None:
+            return True
+        return (now - self.last_swing_scan).total_seconds() >= 82800  # ~23h
 
     def _should_trending_fast_scan(self, now: datetime) -> bool:
         if self.last_trending_fast_scan is None:
@@ -576,6 +594,29 @@ class FutuBot:
         finally:
             self.exchange.config.symbol = orig_symbol
 
+    async def _run_swing_scan(self):
+        logger.info("Starting daily swing scan...")
+        try:
+            signals = await run_swing_scan(self.config.swing)
+            if not signals:
+                await telegram.send_message("📊 <b>Swing Scan</b>\nNo signals today.")
+                logger.info("Swing scan: no signals")
+                return
+            for sig in signals:
+                msg = format_swing_telegram(sig)
+                await telegram.send_message(f"<pre>{msg}</pre>")
+                await asyncio.sleep(1)
+            await telegram.send_message(
+                f"📊 <b>Swing Scan Complete</b>\n{len(signals)} signal(s) found."
+            )
+            logger.info("Swing scan: %d signals sent", len(signals))
+        except Exception as e:
+            logger.error("Swing scan failed: %s", e, exc_info=True)
+            await telegram.send_message(f"⚠️ Swing scan error: {e}")
+
+    async def run_swing_scan_manual(self):
+        await self._run_swing_scan()
+
     async def _scan_symbol(self, symbol: str, bias: HTFBias) -> Signal | None:
         candles = await self.exchange.fetch_candles(
             self.config.timeframe.main_tf,
@@ -706,15 +747,39 @@ class FutuBot:
                             await self.exchange.update_tp_sl(tp_price=tp, sl_price=signal.sl_price)
                             tp_sl_ok = True
                         except Exception as e:
-                            logger.error("TP/SL FAILED for %s: %s — closing position", sym.split("/")[0], e)
-                            close_side = "sell" if position["side"] == "long" else "buy"
-                            try:
-                                await self.exchange.place_market_order(close_side, abs(position["size"]), reduce_only=True)
-                                logger.info("Emergency close %s — no TP/SL", sym.split("/")[0])
-                            except Exception as close_err:
-                                logger.error("Emergency close FAILED %s: %s", sym.split("/")[0], close_err)
-                            state.has_position = False
-                            state.has_trending_position = False
+                            err_str = str(e)
+                            if "51280" in err_str:
+                                # SL rejected — price already past SL level
+                                # TP was set successfully (set first), check if price past SL
+                                mark = float(position.get("markPrice") or 0)
+                                sl_breached = False
+                                if position["side"] == "long" and mark > 0 and mark <= signal.sl_price:
+                                    sl_breached = True
+                                elif position["side"] == "short" and mark > 0 and mark >= signal.sl_price:
+                                    sl_breached = True
+                                if sl_breached:
+                                    logger.error("SL past price %s: mark=%s SL=%s — closing", sym.split("/")[0], mark, signal.sl_price)
+                                    close_side = "sell" if position["side"] == "long" else "buy"
+                                    try:
+                                        await self.exchange.place_market_order(close_side, abs(position["size"]), reduce_only=True)
+                                    except Exception as close_err:
+                                        logger.error("Emergency close FAILED %s: %s", sym.split("/")[0], close_err)
+                                    state.has_position = False
+                                    state.has_trending_position = False
+                                else:
+                                    # Mark NOT past SL yet — keep position, client-side SL will monitor
+                                    logger.warning("SL reject %s but mark=%s OK — using client SL at %s", sym.split("/")[0], mark, signal.sl_price)
+                                    tp_sl_ok = True
+                            else:
+                                logger.error("TP/SL FAILED for %s: %s — closing position", sym.split("/")[0], e)
+                                close_side = "sell" if position["side"] == "long" else "buy"
+                                try:
+                                    await self.exchange.place_market_order(close_side, abs(position["size"]), reduce_only=True)
+                                    logger.info("Emergency close %s — no TP/SL", sym.split("/")[0])
+                                except Exception as close_err:
+                                    logger.error("Emergency close FAILED %s: %s", sym.split("/")[0], close_err)
+                                state.has_position = False
+                                state.has_trending_position = False
                     else:
                         tp_sl_ok = True
                     state.limit_order_id = None
