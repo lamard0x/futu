@@ -12,7 +12,7 @@ class SwingConfig:
     min_optional_score: int = 3      # 3/5 optional conditions
     hold_days_min: int = 2
     hold_days_max: int = 14
-    scan_hours_utc: list = field(default_factory=lambda: [0, 6, 12, 18])  # every 6h
+    scan_hours_utc: list = field(default_factory=lambda: [0, 4, 8, 12, 16, 20])  # every 4h
     scan_minute_utc: int = 5
     top_symbols: int = 100           # top 100 by volume per exchange
     rate_limit_delay: float = 0.3    # seconds between API calls
