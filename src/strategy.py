@@ -180,6 +180,7 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
                        zones_15m: list | None = None, zones_h1: list | None = None, zones_h4: list | None = None) -> Signal | None:
     if len(df) < 3:
         return None
+    counter_trend = bias == HTFBias.BEARISH  # LONG in bearish = counter-trend
     row = df.iloc[-2]  # Use closed candle — live candle wick/close unreliable
     close = row["close"]
     opn = row["open"]
@@ -199,7 +200,7 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
     # ── Mandatory conditions (all must pass) ──
     touch_lower = low <= bb_lower * (1 + cfg.bb_touch_pct / 100)
     bb_width = row["bb_upper"] - bb_lower
-    close_inside = close > bb_lower + bb_width * 0.10  # must be above 10% of BB range
+    close_inside = close > bb_lower + bb_width * 0.25  # must be above 25% of BB range
     # Anti-breakout: previous candle must also be above BB lower (not a fresh breakdown)
     prev_row = df.iloc[-3] if len(df) >= 4 else row
     prev_above_bb = prev_row["close"] > prev_row["bb_lower"]
@@ -230,8 +231,10 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
     z_h1 = zones_h1 or []
     z_h4 = zones_h4 or []
     confluence = score_demand_confluence(low, z_15m, z_h1, z_h4)
-    if confluence == 0:
-        logger.debug("SKIP LONG %s: no demand zone near %.2f", symbol, low)
+    min_confluence = 2 if counter_trend else 1
+    if confluence < min_confluence:
+        logger.debug("SKIP LONG %s: demand confluence %d < %d%s", symbol, confluence, min_confluence,
+                      " (counter-trend)" if counter_trend else "")
         return None
 
     # BB mid room — mandatory
@@ -239,7 +242,9 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
         logger.debug("SKIP LONG %s: price above BB mid (no room for TP)", symbol)
         return None
 
-    # ── Optional conditions (4/4 = full, 3/4 = 90% → 0.75x vol) ──
+    # ── Optional conditions ──
+    # Counter-trend (H1 bearish): need 4/4 — only trade perfect setups
+    # With-trend / neutral: need 3/4 — 0.75x vol if not full
     oversold_threshold, _ = get_rsi_thresholds(cfg, bias)
     opt_wick = wick_pct >= 0.15
     opt_bullish = close > opn
@@ -247,7 +252,8 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
     opt_vol = volume > vol_sma * cfg.volume_range_mult if vol_sma > 0 else True
 
     opt_count = sum([opt_wick, opt_bullish, opt_rsi, opt_vol])
-    if opt_count < 3:
+    min_opt = 4 if counter_trend else 3
+    if opt_count < min_opt:
         reasons = []
         if not opt_wick:
             reasons.append(f"wick {wick_pct:.0%} < 15%")
@@ -258,7 +264,8 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
         if not opt_vol:
             ratio = volume / vol_sma if vol_sma > 0 else 0
             reasons.append(f"vol {ratio:.1f}x < {cfg.volume_range_mult}x")
-        logger.debug("SKIP LONG %s: %s (%d/4 optional)", symbol, " | ".join(reasons), opt_count)
+        ct_tag = " [counter-trend]" if counter_trend else ""
+        logger.debug("SKIP LONG %s: %s (%d/4 optional, need %d)%s", symbol, " | ".join(reasons), opt_count, min_opt, ct_tag)
         return None
 
     condition_pct = 1.0 if opt_count == 4 else 0.75
@@ -286,6 +293,7 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
                         zones_15m: list | None = None, zones_h1: list | None = None, zones_h4: list | None = None) -> Signal | None:
     if len(df) < 3:
         return None
+    counter_trend = bias == HTFBias.BULLISH  # SHORT in bullish = counter-trend
     row = df.iloc[-2]  # Use closed candle — live candle wick/close unreliable
     close = row["close"]
     opn = row["open"]
@@ -305,7 +313,7 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
     # ── Mandatory conditions (all must pass) ──
     touch_upper = high >= bb_upper * (1 - cfg.bb_touch_pct / 100)
     bb_width = bb_upper - row["bb_lower"]
-    close_inside = close < bb_upper - bb_width * 0.10  # must be below 90% of BB range
+    close_inside = close < bb_upper - bb_width * 0.25  # must be below 75% of BB range
     # Anti-breakout: previous candle must also be below BB upper (not a fresh breakout)
     prev_row = df.iloc[-3] if len(df) >= 4 else row
     prev_below_bb = prev_row["close"] < prev_row["bb_upper"]
@@ -336,8 +344,10 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
     z_h1 = zones_h1 or []
     z_h4 = zones_h4 or []
     confluence = score_supply_confluence(high, z_15m, z_h1, z_h4)
-    if confluence == 0:
-        logger.debug("SKIP SHORT %s: no supply zone near %.2f", symbol, high)
+    min_confluence = 2 if counter_trend else 1
+    if confluence < min_confluence:
+        logger.debug("SKIP SHORT %s: supply confluence %d < %d%s", symbol, confluence, min_confluence,
+                      " (counter-trend)" if counter_trend else "")
         return None
 
     # BB mid room — mandatory
@@ -345,7 +355,9 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
         logger.debug("SKIP SHORT %s: price below BB mid (no room for TP)", symbol)
         return None
 
-    # ── Optional conditions (4/4 = full, 3/4 = 90% → 0.75x vol) ──
+    # ── Optional conditions ──
+    # Counter-trend (H1 bullish): need 4/4 — only trade perfect setups
+    # With-trend / neutral: need 3/4 — 0.75x vol if not full
     _, overbought_threshold = get_rsi_thresholds(cfg, bias)
     opt_wick = wick_pct >= 0.15
     opt_bearish = close < opn
@@ -353,7 +365,8 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
     opt_vol = volume > vol_sma * cfg.volume_range_mult if vol_sma > 0 else True
 
     opt_count = sum([opt_wick, opt_bearish, opt_rsi, opt_vol])
-    if opt_count < 3:
+    min_opt = 4 if counter_trend else 3
+    if opt_count < min_opt:
         reasons = []
         if not opt_wick:
             reasons.append(f"wick {wick_pct:.0%} < 15%")
@@ -364,7 +377,8 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
         if not opt_vol:
             ratio = volume / vol_sma if vol_sma > 0 else 0
             reasons.append(f"vol {ratio:.1f}x < {cfg.volume_range_mult}x")
-        logger.debug("SKIP SHORT %s: %s (%d/4 optional)", symbol, " | ".join(reasons), opt_count)
+        ct_tag = " [counter-trend]" if counter_trend else ""
+        logger.debug("SKIP SHORT %s: %s (%d/4 optional, need %d)%s", symbol, " | ".join(reasons), opt_count, min_opt, ct_tag)
         return None
 
     condition_pct = 1.0 if opt_count == 4 else 0.75

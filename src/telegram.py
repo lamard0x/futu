@@ -240,14 +240,16 @@ class CommandListener:
         await send_message(text)
 
     async def _cmd_bias(self):
-        lines = ["🔄 <b>H4 Bias</b>\n"]
-        for sym in self.bot.symbols:
+        lines = ["🔄 <b>Bias (H1/H4)</b>\n"]
+        all_syms = set(self.bot.symbols) | set(self.bot.config.risk.ranging_symbols)
+        for sym in sorted(all_syms):
             state = self.bot.states.get(sym)
             if state:
-                emoji = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪"}.get(
-                    state.bias.value.upper(), "⚪"
-                )
-                lines.append(f"  {emoji} {sym.split('/')[0]}: {state.bias.value}")
+                h1 = state.bias_h1.value
+                h4 = state.bias_h4.value
+                e1 = {"bullish": "🟢", "bearish": "🔴"}.get(h1, "⚪")
+                e4 = {"bullish": "🟢", "bearish": "🔴"}.get(h4, "⚪")
+                lines.append(f"  {sym.split('/')[0]}: {e1}{h1} / {e4}{h4}")
         await send_message("\n".join(lines))
 
     async def _cmd_config(self):
@@ -301,7 +303,7 @@ class CommandListener:
 
             state = self.bot.states.get(symbol)
             regime_str = ""
-            bias_str = state.bias.value if state else ""
+            bias_str = state.bias_h1.value if state else ""
 
             df = compute_all(candles, self.bot.config.indicators)
             last = df.iloc[-1]
@@ -387,10 +389,14 @@ async def notify_error(error: str):
 
 
 async def notify_bias_update(biases: dict[str, str]):
-    lines = ["🔄 <b>H4 Bias Update</b>"]
+    em = {"bullish": "🟢", "bearish": "🔴", "neutral": "⚪"}
+    lines = ["🔄 <b>Bias Update (H1 / H4)</b>\n"]
     for sym, bias in biases.items():
-        emoji = {"bullish": "🟢", "bearish": "🔴", "neutral": "⚪"}.get(bias, "⚪")
-        lines.append(f"  {emoji} {sym.split('/')[0]}: {bias}")
+        # bias format: "H1:bearish/H4:bullish"
+        parts = bias.split("/")
+        h1 = parts[0].split(":")[1] if len(parts) >= 1 else "?"
+        h4 = parts[1].split(":")[1] if len(parts) >= 2 else "?"
+        lines.append(f"  {em.get(h1, '⚪')}{em.get(h4, '⚪')} <b>{sym.split('/')[0]}</b>  {h1} / {h4}")
     await send_message("\n".join(lines))
 
 

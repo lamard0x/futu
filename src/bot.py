@@ -43,7 +43,8 @@ _strategy_logger.setLevel(logging.DEBUG)
 @dataclass
 class SymbolState:
     symbol: str
-    bias: HTFBias = HTFBias.NEUTRAL
+    bias_h1: HTFBias = HTFBias.NEUTRAL   # H1 bias for ranging
+    bias_h4: HTFBias = HTFBias.NEUTRAL   # H4 bias for trending
     has_position: bool = False          # ranging position
     has_trending_position: bool = False  # trending position (independent)
     position_candle_count: int = 0
@@ -225,7 +226,7 @@ class FutuBot:
         if self._should_refresh_symbols(now):
             await self._refresh_symbols()
 
-        # Update H4 bias every 4 hours
+        # Update H1 bias every 1 hour
         if self._should_htf_scan(now):
             await self._update_all_htf_bias()
             self.last_htf_scan = now
@@ -292,7 +293,7 @@ class FutuBot:
     def _should_htf_scan(self, now: datetime) -> bool:
         if self.last_htf_scan is None:
             return True
-        return (now - self.last_htf_scan).total_seconds() >= 14400  # 4h
+        return (now - self.last_htf_scan).total_seconds() >= 3600  # 1h
 
     def _should_main_scan(self, now: datetime) -> bool:
         if self.last_main_scan is None:
@@ -317,11 +318,11 @@ class FutuBot:
 
     def _should_swing_scan(self, now: datetime) -> bool:
         cfg = self.config.swing
-        if now.hour != cfg.scan_hour_utc or now.minute < cfg.scan_minute_utc:
+        if now.hour not in cfg.scan_hours_utc or now.minute < cfg.scan_minute_utc:
             return False
         if self.last_swing_scan is None:
             return True
-        return (now - self.last_swing_scan).total_seconds() >= 82800  # ~23h
+        return (now - self.last_swing_scan).total_seconds() >= 18000  # 5h gap
 
     def _should_trending_fast_scan(self, now: datetime) -> bool:
         if self.last_trending_fast_scan is None:
@@ -337,18 +338,26 @@ class FutuBot:
 
     async def _update_all_htf_bias(self):
         biases = {}
-        # Scan both trending (top volume) + ranging (fixed list)
         all_syms = set(self.symbols) | set(self.config.risk.ranging_symbols)
         for sym in all_syms:
             try:
-                candles = await self.exchange.fetch_candles(
+                # H1 bias for ranging
+                candles_h1 = await self.exchange.fetch_candles(
                     self.config.timeframe.htf, 200, symbol=sym,
                 )
-                if len(candles) >= 50:
-                    df = compute_all(candles, self.config.indicators)
-                    self.states[sym].bias = detect_htf_bias(df)
-                    biases[sym] = self.states[sym].bias.value
-                    logger.info("H4 bias %s: %s", sym.split("/")[0], self.states[sym].bias.value)
+                if len(candles_h1) >= 50:
+                    df_h1 = compute_all(candles_h1, self.config.indicators)
+                    self.states[sym].bias_h1 = detect_htf_bias(df_h1)
+                    logger.info("H1 bias %s: %s", sym.split("/")[0], self.states[sym].bias_h1.value)
+                # H4 bias for trending
+                candles_h4 = await self.exchange.fetch_candles(
+                    self.config.timeframe.htf_trending, 200, symbol=sym,
+                )
+                if len(candles_h4) >= 50:
+                    df_h4 = compute_all(candles_h4, self.config.indicators)
+                    self.states[sym].bias_h4 = detect_htf_bias(df_h4)
+                    logger.info("H4 bias %s: %s", sym.split("/")[0], self.states[sym].bias_h4.value)
+                biases[sym] = f"H1:{self.states[sym].bias_h1.value}/H4:{self.states[sym].bias_h4.value}"
             except Exception as e:
                 logger.warning("HTF scan error %s: %s", sym, e)
             await asyncio.sleep(0.2)
@@ -409,7 +418,7 @@ class FutuBot:
                 # 15m scan: detect setup
                 if scan_tf == self.config.timeframe.main_tf:
                     signal = await asyncio.wait_for(
-                        self._scan_symbol(sym, state.bias), timeout=30)
+                        self._scan_symbol(sym, state.bias_h1), timeout=30)
                     if signal and signal.type != SignalType.NONE:
                         # Try immediate 5m confirm
                         try:
@@ -482,7 +491,7 @@ class FutuBot:
                 df = compute_all(candles, self.config.indicators)
 
                 # Pullback only — no breakout (breakout = chasing price)
-                pb_signal = scan_trending_pullback(df, self.config.trending, state.bias, symbol=sym.split("/")[0])
+                pb_signal = scan_trending_pullback(df, self.config.trending, state.bias_h4, symbol=sym.split("/")[0])
                 if pb_signal and pb_signal.type != SignalType.NONE:
                     rr_ok, rr = self.risk.check_rr(pb_signal)
                     if not rr_ok:
@@ -529,7 +538,7 @@ class FutuBot:
                     continue
 
                 df = compute_all(candles, self.config.indicators)
-                signal = scan_trending_pullback(df, self.config.trending, state.bias, symbol=sym.split("/")[0])
+                signal = scan_trending_pullback(df, self.config.trending, state.bias_h4, symbol=sym.split("/")[0])
 
                 if signal and signal.type != SignalType.NONE:
                     rr_ok, rr = self.risk.check_rr(signal)
@@ -808,7 +817,7 @@ class FutuBot:
                                     "sl": signal.sl_price, "tp": tp,
                                 }],
                                 regime=signal.regime.value,
-                                bias=state.bias.value,
+                                bias=state.bias_h1.value,
                             )
                         except Exception:
                             pass

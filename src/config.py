@@ -131,7 +131,8 @@ class TrendingConfig:
 
 @dataclass
 class TimeframeConfig:
-    htf: str = "4h"
+    htf: str = "1h"          # ranging bias
+    htf_trending: str = "4h"  # trending bias
     main_tf: str = "15m"
     confirm_tf: str = "5m"
     trending_tf: str = "30m"
