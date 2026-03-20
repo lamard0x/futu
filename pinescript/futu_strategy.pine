@@ -225,8 +225,8 @@ if show_zones and barstate.islast
 // Mandatory conditions (all must pass)
 // BB touch + close 25% inside BB range + anti-breakout (prev candle inside BB) + zone + room for TP
 bb_w = bb_upper[1] - bb_lower[1]
-r_long_mandatory  = c_low <= bb_lower[1] * (1 + bb_touch_pct / 100) and c_close > bb_lower[1] + bb_w * 0.25 and close[2] > low[2] and in_demand and c_close < bb_basis[1]
-r_short_mandatory = c_high >= bb_upper[1] * (1 - bb_touch_pct / 100) and c_close < bb_upper[1] - bb_w * 0.25 and close[2] < high[2] and in_supply and c_close > bb_basis[1]
+r_long_mandatory  = c_low <= bb_lower[1] * (1 + bb_touch_pct / 100) and c_close > bb_lower[1] and close[2] > low[2] and in_demand and c_close < bb_basis[1]
+r_short_mandatory = c_high >= bb_upper[1] * (1 - bb_touch_pct / 100) and c_close < bb_upper[1] and close[2] < high[2] and in_supply and c_close > bb_basis[1]
 // Anti-breakout: prev candle (index 2 = closed-1) must be inside BB
 r_long_anti_brk  = close[2] > ta.sma(close, bb_period)[2] - bb_std * ta.stdev(close, bb_period)[2]
 r_short_anti_brk = close[2] < ta.sma(close, bb_period)[2] + bb_std * ta.stdev(close, bb_period)[2]

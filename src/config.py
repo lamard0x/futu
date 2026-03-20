@@ -94,7 +94,7 @@ class RiskConfig:
     cooldown_candles: int = 0
     min_rr_trending: float = 1.5
     min_rr_ranging: float = 1.2
-    min_rr_ranging_confluence: float = 1.0  # R:R when S/D confluence >= 2
+    min_rr_ranging_confluence: float = 1.2  # R:R when S/D confluence >= 2 (same as normal)
 
 
 @dataclass
