@@ -181,6 +181,17 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
     if len(df) < 3:
         return None
     counter_trend = bias == HTFBias.BEARISH  # LONG in bearish = counter-trend
+
+    # Pump mode: if price pumped >2% in last 4 candles (≈1h on 15m),
+    # override counter-trend — market is pumping, LONG is with-trend
+    if counter_trend and len(df) >= 6:
+        price_4_ago = df.iloc[-6]["close"]
+        price_now = df.iloc[-2]["close"]
+        pct_pump = (price_now - price_4_ago) / price_4_ago * 100
+        if pct_pump >= 2.0:
+            counter_trend = False
+            logger.info("PUMP MODE %s: +%.1f%% in 4 candles — LONG as with-trend", symbol, pct_pump)
+
     row = df.iloc[-2]  # Use closed candle — live candle wick/close unreliable
     close = row["close"]
     opn = row["open"]
@@ -232,6 +243,12 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
     z_h4 = zones_h4 or []
     confluence = score_demand_confluence(low, z_15m, z_h1, z_h4)
     min_confluence = 2 if counter_trend else 1
+    # High volatility: reduce confluence requirement (ATR > 1.5x average)
+    if len(df) >= 20:
+        atr_mean = df["atr"].iloc[-20:].mean()
+        if atr_mean > 0 and atr > atr_mean * 1.5:
+            min_confluence = max(1, min_confluence - 1)
+            logger.debug("HIGH VOL %s: ATR %.2f > 1.5x avg %.2f — confluence reduced to %d", symbol, atr, atr_mean, min_confluence)
     if confluence < min_confluence:
         logger.debug("SKIP LONG %s: demand confluence %d < %d%s", symbol, confluence, min_confluence,
                       " (counter-trend)" if counter_trend else "")
@@ -294,6 +311,17 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
     if len(df) < 3:
         return None
     counter_trend = bias == HTFBias.BULLISH  # SHORT in bullish = counter-trend
+
+    # Dump mode: if price dropped >2% in last 4 candles (≈1h on 15m),
+    # override counter-trend — market is dumping, SHORT is with-trend
+    if counter_trend and len(df) >= 6:
+        price_4_ago = df.iloc[-6]["close"]
+        price_now = df.iloc[-2]["close"]
+        pct_drop = (price_now - price_4_ago) / price_4_ago * 100
+        if pct_drop <= -2.0:
+            counter_trend = False
+            logger.info("DUMP MODE %s: %.1f%% drop in 4 candles — SHORT as with-trend", symbol, pct_drop)
+
     row = df.iloc[-2]  # Use closed candle — live candle wick/close unreliable
     close = row["close"]
     opn = row["open"]
@@ -345,6 +373,12 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
     z_h4 = zones_h4 or []
     confluence = score_supply_confluence(high, z_15m, z_h1, z_h4)
     min_confluence = 2 if counter_trend else 1
+    # High volatility: reduce confluence requirement (ATR > 1.5x average)
+    if len(df) >= 20:
+        atr_mean = df["atr"].iloc[-20:].mean()
+        if atr_mean > 0 and atr > atr_mean * 1.5:
+            min_confluence = max(1, min_confluence - 1)
+            logger.debug("HIGH VOL %s: ATR %.2f > 1.5x avg %.2f — confluence reduced to %d", symbol, atr, atr_mean, min_confluence)
     if confluence < min_confluence:
         logger.debug("SKIP SHORT %s: supply confluence %d < %d%s", symbol, confluence, min_confluence,
                       " (counter-trend)" if counter_trend else "")
@@ -488,98 +522,116 @@ def scan_trending_1h(df_1h: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias) ->
 # ── TRENDING PULLBACK (EMA bounce in trend) ──────────────────────
 
 def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias, symbol: str = "") -> Signal | None:
-    """Two-layer pullback entry:
-    Layer 1: EMA21 touch + 40% wick rejection → entry at EMA21
-    Layer 2: If EMA21 no wick → wait for EMA50 touch + any wick → entry at EMA50
+    """Pullback entry with confirmation candle:
+    Touch candle (iloc[-3]): EMA21/50 touch + wick rejection >= 30% (mandatory)
+    Confirm candle (iloc[-2]): closes in trend direction + beyond EMA (mandatory)
+    Optional (3/4 needed): bias, wick >= 50%, RSI range, strong confirm body
     """
     if len(df) < 30:
         return None
 
-    row = df.iloc[-2]  # Use closed candle — live candle wick/close unreliable
-
-    close = row["close"]
-    opn = row["open"]
-    low = row["low"]
-    high = row["high"]
-    adx = row.get("adx") or 0
-    atr = row.get("atr") or 0
-    rsi = row.get("rsi") or 0
-    plus_di = row.get("plus_di") or 0
-    minus_di = row.get("minus_di") or 0
-    ema_f = row.get("ema_9") or 0
-    ema_m = row.get("ema_21") or 0
-    ema_s = row.get("ema_50") or 0
+    # Trend state from confirm candle (latest closed)
+    confirm = df.iloc[-2]
+    adx = confirm.get("adx") or 0
+    atr = confirm.get("atr") or 0
+    rsi = confirm.get("rsi") or 0
+    plus_di = confirm.get("plus_di") or 0
+    minus_di = confirm.get("minus_di") or 0
+    ema_f = confirm.get("ema_9") or 0
+    ema_m = confirm.get("ema_21") or 0
+    ema_s = confirm.get("ema_50") or 0
 
     if atr <= 0 or adx < cfg.adx_min:
         logger.debug("SKIP PB %s: ADX %.0f < %s", symbol, adx, cfg.adx_min)
         return None
 
-    candle_range = high - low
-    if candle_range <= 0:
+    # Touch candle (one before confirmation)
+    touch = df.iloc[-3]
+    t_close = touch["close"]
+    t_open = touch["open"]
+    t_low = touch["low"]
+    t_high = touch["high"]
+    t_range = t_high - t_low
+    if t_range <= 0:
         return None
+    t_ema_m = touch.get("ema_21") or 0
+    t_ema_s = touch.get("ema_50") or 0
+
+    # Confirm candle values
+    c_close = confirm["close"]
+    c_open = confirm["open"]
+    c_high = confirm["high"]
+    c_low = confirm["low"]
+    c_range = c_high - c_low
 
     # ── LONG ──
-    # Mandatory: ADX, DI, EMA order already checked above
     long_di_ok = plus_di > minus_di
     long_ema_ok = ema_f > ema_m
     if not (long_di_ok and long_ema_ok):
-        # Check short side instead
         pass
     else:
-        lower_wick = min(close, opn) - low
-        wick_pct = lower_wick / candle_range
-        ema21_dist = (low - ema_m) / ema_m * 100 if ema_m > 0 else 99
-        ema50_dist = (low - ema_s) / ema_s * 100 if ema_s > 0 else 99
+        t_lower_wick = min(t_close, t_open) - t_low
+        t_wick_pct = t_lower_wick / t_range
 
-        # Mandatory: EMA touch + close above EMA
+        # Mandatory: EMA touch on touch candle
         ema_level = None
         ema_label = ""
-        if low <= ema_m * 1.002 and close > ema_m:
+        if t_low <= t_ema_m * 1.002 and t_close > t_ema_m:
             ema_level, ema_label = ema_m, "EMA21"
-        elif ema_s > 0 and low <= ema_s * 1.002 and close > ema_s:
+        elif t_ema_s > 0 and t_low <= t_ema_s * 1.002 and t_close > t_ema_s:
             ema_level, ema_label = ema_s, "EMA50"
 
         if ema_level is not None:
-            # Optional conditions (4): bias, wick, RSI, candle direction
-            opt_bias = bias in (HTFBias.BULLISH, HTFBias.NEUTRAL)
-            opt_wick = wick_pct >= 0.4
-            opt_rsi = 40 < rsi < 70
-            opt_candle = close > opn
-            opt_count = sum([opt_bias, opt_wick, opt_rsi, opt_candle])
-
-            if opt_count >= 2:
-                condition_pct = 1.0 if opt_count == 4 else 0.75
-                entry = ema_level
-                sl = ema_level - 1.5 * atr
-                tp = entry + 2.0 * (entry - sl)
-                tag = "100%" if opt_count == 4 else f"75%({opt_count}/4)"
-                return Signal(
-                    type=SignalType.LONG, source=SignalSource.MAIN,
-                    regime=Regime.TRENDING, entry_price=entry,
-                    sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-                    reason=f"PB LONG | {ema_label} wick {wick_pct:.0%} ADX {adx:.0f} [{tag}]",
-                    condition_pct=condition_pct,
-                )
+            # Mandatory: wick rejection >= 30%
+            if t_wick_pct < 0.30:
+                logger.debug("SKIP PB LONG %s: touch wick %d%% < 30%%", symbol, int(t_wick_pct * 100))
+            # Mandatory: confirm candle closes bullish + above EMA
+            elif not (c_close > c_open and c_close > ema_level):
+                logger.debug("SKIP PB LONG %s: no confirm (close %s open, %s EMA)",
+                             symbol, ">" if c_close > c_open else "<=",
+                             "above" if c_close > ema_level else "below")
             else:
-                reasons = []
-                if not opt_bias:
-                    reasons.append(f"bias={bias.value}")
-                if not opt_wick:
-                    reasons.append(f"wick {wick_pct:.0%} < 40%")
-                if not opt_rsi:
-                    reasons.append(f"RSI {rsi:.0f} out 40-70")
-                if not opt_candle:
-                    reasons.append("bearish candle")
-                logger.debug("SKIP PB LONG %s: %s (%d/4 optional)", symbol, " | ".join(reasons), opt_count)
+                # Optional (4): bias, strong wick, RSI, strong confirm body
+                opt_bias = bias in (HTFBias.BULLISH, HTFBias.NEUTRAL)
+                opt_wick = t_wick_pct >= 0.50
+                opt_rsi = 40 < rsi < 70
+                opt_body = (c_close - c_open) / c_range >= 0.4 if c_range > 0 else False
+                opt_count = sum([opt_bias, opt_wick, opt_rsi, opt_body])
+
+                if opt_count >= 3:
+                    condition_pct = 1.0 if opt_count == 4 else 0.75
+                    entry = ema_level
+                    sl = ema_level - 1.5 * atr
+                    tp = entry + 2.0 * (entry - sl)
+                    tag = "100%" if opt_count == 4 else f"75%({opt_count}/4)"
+                    return Signal(
+                        type=SignalType.LONG, source=SignalSource.MAIN,
+                        regime=Regime.TRENDING, entry_price=entry,
+                        sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
+                        reason=f"PB LONG | {ema_label} wick {t_wick_pct:.0%} confirm ADX {adx:.0f} [{tag}]",
+                        condition_pct=condition_pct,
+                    )
+                else:
+                    reasons = []
+                    if not opt_bias:
+                        reasons.append(f"bias={bias.value}")
+                    if not opt_wick:
+                        reasons.append(f"wick {t_wick_pct:.0%} < 50%")
+                    if not opt_rsi:
+                        reasons.append(f"RSI {rsi:.0f} out 40-70")
+                    if not opt_body:
+                        reasons.append("weak confirm body")
+                    logger.debug("SKIP PB LONG %s: %s (%d/4 opt, need 3)", symbol, " | ".join(reasons), opt_count)
         else:
+            t_ema21_dist = (t_low - t_ema_m) / t_ema_m * 100 if t_ema_m > 0 else 99
+            t_ema50_dist = (t_low - t_ema_s) / t_ema_s * 100 if t_ema_s > 0 else 99
             reasons = []
-            if ema21_dist > 0.2:
-                reasons.append(f"EMA21 {ema21_dist:.1f}% away")
-            elif wick_pct < 0.4:
-                reasons.append(f"EMA21 touch but close below")
-            if ema50_dist > 0.2:
-                reasons.append(f"EMA50 {ema50_dist:.1f}% away")
-            logger.debug("SKIP PB LONG %s: %s", symbol, " | ".join(reasons))
+            if t_ema21_dist > 0.2:
+                reasons.append(f"EMA21 {t_ema21_dist:.1f}% away")
+            if t_ema50_dist > 0.2:
+                reasons.append(f"EMA50 {t_ema50_dist:.1f}% away")
+            if reasons:
+                logger.debug("SKIP PB LONG %s: %s", symbol, " | ".join(reasons))
 
     # ── SHORT ──
     short_di_ok = minus_di > plus_di
@@ -587,58 +639,68 @@ def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias,
     if not (short_di_ok and short_ema_ok):
         pass
     else:
-        upper_wick = high - max(close, opn)
-        wick_pct = upper_wick / candle_range
-        ema21_dist = (ema_m - high) / ema_m * 100 if ema_m > 0 else 99
-        ema50_dist = (ema_s - high) / ema_s * 100 if ema_s > 0 else 99
+        t_upper_wick = t_high - max(t_close, t_open)
+        t_wick_pct = t_upper_wick / t_range
 
-        # Mandatory: EMA touch + close below EMA
+        # Mandatory: EMA touch on touch candle
         ema_level = None
         ema_label = ""
-        if high >= ema_m * 0.998 and close < ema_m:
+        if t_high >= t_ema_m * 0.998 and t_close < t_ema_m:
             ema_level, ema_label = ema_m, "EMA21"
-        elif ema_s > 0 and high >= ema_s * 0.998 and close < ema_s:
+        elif t_ema_s > 0 and t_high >= t_ema_s * 0.998 and t_close < t_ema_s:
             ema_level, ema_label = ema_s, "EMA50"
 
         if ema_level is not None:
-            # Optional conditions (4): bias, wick, RSI, candle direction
-            opt_bias = bias in (HTFBias.BEARISH, HTFBias.NEUTRAL)
-            opt_wick = wick_pct >= 0.4
-            opt_rsi = 30 < rsi < 60
-            opt_candle = close < opn
-            opt_count = sum([opt_bias, opt_wick, opt_rsi, opt_candle])
-
-            if opt_count >= 2:
-                condition_pct = 1.0 if opt_count == 4 else 0.75
-                entry = ema_level
-                sl = ema_level + 1.5 * atr
-                tp = entry - 2.0 * (sl - entry)
-                tag = "100%" if opt_count == 4 else f"75%({opt_count}/4)"
-                return Signal(
-                    type=SignalType.SHORT, source=SignalSource.MAIN,
-                    regime=Regime.TRENDING, entry_price=entry,
-                    sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
-                    reason=f"PB SHORT | {ema_label} wick {wick_pct:.0%} ADX {adx:.0f} [{tag}]",
-                    condition_pct=condition_pct,
-                )
+            # Mandatory: wick rejection >= 30%
+            if t_wick_pct < 0.30:
+                logger.debug("SKIP PB SHORT %s: touch wick %d%% < 30%%", symbol, int(t_wick_pct * 100))
+            # Mandatory: confirm candle closes bearish + below EMA
+            elif not (c_close < c_open and c_close < ema_level):
+                logger.debug("SKIP PB SHORT %s: no confirm (close %s open, %s EMA)",
+                             symbol, "<" if c_close < c_open else ">=",
+                             "below" if c_close < ema_level else "above")
             else:
-                reasons = []
-                if not opt_bias:
-                    reasons.append(f"bias={bias.value}")
-                if not opt_wick:
-                    reasons.append(f"wick {wick_pct:.0%} < 40%")
-                if not opt_rsi:
-                    reasons.append(f"RSI {rsi:.0f} out 30-60")
-                if not opt_candle:
-                    reasons.append("bullish candle")
-                logger.debug("SKIP PB SHORT %s: %s (%d/4 optional)", symbol, " | ".join(reasons), opt_count)
+                # Optional (4): bias, strong wick, RSI, strong confirm body
+                opt_bias = bias in (HTFBias.BEARISH, HTFBias.NEUTRAL)
+                opt_wick = t_wick_pct >= 0.50
+                opt_rsi = 30 < rsi < 60
+                opt_body = (c_open - c_close) / c_range >= 0.4 if c_range > 0 else False
+                opt_count = sum([opt_bias, opt_wick, opt_rsi, opt_body])
+
+                if opt_count >= 3:
+                    condition_pct = 1.0 if opt_count == 4 else 0.75
+                    entry = ema_level
+                    sl = ema_level + 1.5 * atr
+                    tp = entry - 2.0 * (sl - entry)
+                    tag = "100%" if opt_count == 4 else f"75%({opt_count}/4)"
+                    return Signal(
+                        type=SignalType.SHORT, source=SignalSource.MAIN,
+                        regime=Regime.TRENDING, entry_price=entry,
+                        sl_price=sl, tp1_price=tp, tp2_price=None, atr=atr,
+                        reason=f"PB SHORT | {ema_label} wick {t_wick_pct:.0%} confirm ADX {adx:.0f} [{tag}]",
+                        condition_pct=condition_pct,
+                    )
+                else:
+                    reasons = []
+                    if not opt_bias:
+                        reasons.append(f"bias={bias.value}")
+                    if not opt_wick:
+                        reasons.append(f"wick {t_wick_pct:.0%} < 50%")
+                    if not opt_rsi:
+                        reasons.append(f"RSI {rsi:.0f} out 30-60")
+                    if not opt_body:
+                        reasons.append("weak confirm body")
+                    logger.debug("SKIP PB SHORT %s: %s (%d/4 opt, need 3)", symbol, " | ".join(reasons), opt_count)
         else:
+            t_ema21_dist = (t_ema_m - t_high) / t_ema_m * 100 if t_ema_m > 0 else 99
+            t_ema50_dist = (t_ema_s - t_high) / t_ema_s * 100 if t_ema_s > 0 else 99
             reasons = []
-            if ema21_dist > 0.2:
-                reasons.append(f"EMA21 {ema21_dist:.1f}% away")
-            if ema50_dist > 0.2:
-                reasons.append(f"EMA50 {ema50_dist:.1f}% away")
-            logger.debug("SKIP PB SHORT %s: %s", symbol, " | ".join(reasons))
+            if t_ema21_dist > 0.2:
+                reasons.append(f"EMA21 {t_ema21_dist:.1f}% away")
+            if t_ema50_dist > 0.2:
+                reasons.append(f"EMA50 {t_ema50_dist:.1f}% away")
+            if reasons:
+                logger.debug("SKIP PB SHORT %s: %s", symbol, " | ".join(reasons))
 
     return None
 

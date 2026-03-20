@@ -226,10 +226,7 @@ class FutuBot:
         if self._should_refresh_symbols(now):
             await self._refresh_symbols()
 
-        # Update H1 bias every 1 hour
-        if self._should_htf_scan(now):
-            await self._update_all_htf_bias()
-            self.last_htf_scan = now
+        # HTF bias now updates with each ranging scan (not standalone)
 
         # Monitor pending limit orders
         await self._monitor_limit_orders()
@@ -256,10 +253,7 @@ class FutuBot:
             await self._scan_all_symbols(self.config.timeframe.main_tf)
             self.last_main_scan = now
 
-        # 5m scan: confirm pending 15m signals
-        if self._should_5m_confirm(now):
-            await self._scan_all_symbols(self.config.timeframe.confirm_tf)
-            self.last_5m_scan = now
+        # 5m confirm removed — signals execute directly on 15m
 
         # Trending scan every 1 hour (1H TF) — breakout + pullback
         if self.config.trending.enabled and self._should_trending_scan(now):
@@ -367,6 +361,11 @@ class FutuBot:
     async def _scan_all_symbols(self, tf: str = None):
         """Multi-TF ranging scan on fixed large-cap list."""
         scan_tf = tf or self.config.timeframe.main_tf
+
+        # Update HTF bias every ranging scan — not just every 1h
+        if scan_tf == self.config.timeframe.main_tf:
+            await self._update_all_htf_bias()
+
         open_positions = sum(1 for s in self.states.values() if s.has_position)
         signals_found = 0
 
@@ -388,58 +387,16 @@ class FutuBot:
                 break
 
             try:
-                # Check pending signals waiting for 5m confirm
-                if state.pending_signal and scan_tf == self.config.timeframe.confirm_tf:
-                    state.pending_ticks += 1
-                    candles_5m = await self.exchange.fetch_candles(
-                        self.config.timeframe.confirm_tf, 50, symbol=sym)
-                    if len(candles_5m) >= 10:
-                        df_5m = compute_all(candles_5m, self.config.indicators)
-                        confirmed = confirm_on_5m(df_5m, state.pending_signal)
-                        if confirmed:
-                            logger.info("5m CONFIRMED %s %s",
-                                        sym.split("/")[0], state.pending_signal.type.value)
-                            signals_found += 1
-                            await self._execute_signal(state.pending_signal, sym)
-                            open_positions += 1
-                            state.pending_signal = None
-                            state.pending_ticks = 0
-                        elif state.pending_ticks >= 3:
-                            # 3 ticks (15min) without 5m confirm → execute on 15m signal alone
-                            logger.info("15m FORCE ENTRY %s (no 5m confirm after %d ticks)",
-                                        sym.split("/")[0], state.pending_ticks)
-                            signals_found += 1
-                            await self._execute_signal(state.pending_signal, sym)
-                            open_positions += 1
-                            state.pending_signal = None
-                            state.pending_ticks = 0
-                    continue
-
-                # 15m scan: detect setup
+                # 15m scan: detect setup → execute directly (no 5m confirm)
                 if scan_tf == self.config.timeframe.main_tf:
                     signal = await asyncio.wait_for(
-                        self._scan_symbol(sym, state.bias_h1), timeout=30)
+                        self._scan_symbol(sym, state.bias_h1, state.bias_h4), timeout=30)
                     if signal and signal.type != SignalType.NONE:
-                        # Try immediate 5m confirm
-                        try:
-                            candles_5m = await self.exchange.fetch_candles(
-                                self.config.timeframe.confirm_tf, 50, symbol=sym)
-                            if len(candles_5m) >= 10:
-                                df_5m = compute_all(candles_5m, self.config.indicators)
-                                if confirm_on_5m(df_5m, signal):
-                                    logger.info("INSTANT CONFIRM %s %s",
-                                                sym.split("/")[0], signal.type.value)
-                                    signals_found += 1
-                                    await self._execute_signal(signal, sym)
-                                    open_positions += 1
-                                    continue
-                        except Exception:
-                            pass
-                        # No immediate confirm → queue for 5m check
-                        state.pending_signal = signal
-                        state.pending_ticks = 0
-                        logger.info("15m SIGNAL %s %s — waiting 5m confirm",
+                        logger.info("15m SIGNAL %s %s — executing directly",
                                     sym.split("/")[0], signal.type.value)
+                        signals_found += 1
+                        await self._execute_signal(signal, sym)
+                        open_positions += 1
 
             except asyncio.TimeoutError:
                 logger.warning("Scan timeout %s", sym.split("/")[0])
@@ -613,7 +570,7 @@ class FutuBot:
                 return
             for sig in signals:
                 msg = format_swing_telegram(sig)
-                await telegram.send_message(f"<pre>{msg}</pre>")
+                await telegram.send_message(msg)
                 await asyncio.sleep(1)
             await telegram.send_message(
                 f"📊 <b>Swing Scan Complete</b>\n{len(signals)} signal(s) found."
@@ -626,7 +583,7 @@ class FutuBot:
     async def run_swing_scan_manual(self):
         await self._run_swing_scan()
 
-    async def _scan_symbol(self, symbol: str, bias: HTFBias) -> Signal | None:
+    async def _scan_symbol(self, symbol: str, bias: HTFBias, bias_h4: HTFBias = HTFBias.NEUTRAL) -> Signal | None:
         candles = await self.exchange.fetch_candles(
             self.config.timeframe.main_tf,
             self.config.timeframe.candle_limit,
@@ -656,6 +613,12 @@ class FutuBot:
         signal = scan_main(df, self.config.strategy, bias, symbol=symbol.split("/")[0],
                           zones_h1_demand=zones_h1_demand, zones_h1_supply=zones_h1_supply,
                           zones_h4_demand=zones_h4_demand, zones_h4_supply=zones_h4_supply)
+
+        # If no ranging signal, try trending pullback on same 15m data
+        if signal is None:
+            pb_signal = scan_trending_pullback(df, self.config.trending, bias_h4, symbol=symbol.split("/")[0])
+            if pb_signal and pb_signal.type != SignalType.NONE:
+                signal = pb_signal
 
         if signal:
             rr_ok, rr = self.risk.check_rr(signal)

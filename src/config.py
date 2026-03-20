@@ -51,7 +51,7 @@ class StrategyConfig:
     rsi_oversold: float = 45.0       # neutral default
     rsi_overbought: float = 55.0     # neutral default
     rsi_bull_oversold: float = 42.0   # bullish bias: easier long
-    rsi_bull_overbought: float = 65.0 # bullish bias: harder short
+    rsi_bull_overbought: float = 58.0 # bullish bias: still filtered but achievable
     rsi_bear_oversold: float = 35.0   # bearish bias: harder long
     rsi_bear_overbought: float = 58.0 # bearish bias: easier short
     bb_touch_pct: float = 0.8
@@ -92,9 +92,9 @@ class RiskConfig:
     max_positions: int = 999  # unlimited, 1 per symbol per regime
     max_symbols: int = 15
     cooldown_candles: int = 0
-    min_rr_trending: float = 1.3
-    min_rr_ranging: float = 1.0
-    min_rr_ranging_confluence: float = 0.8  # R:R when S/D confluence >= 2
+    min_rr_trending: float = 1.5
+    min_rr_ranging: float = 1.2
+    min_rr_ranging_confluence: float = 1.0  # R:R when S/D confluence >= 2
 
 
 @dataclass
@@ -118,7 +118,7 @@ class WebhookConfig:
 class TrendingConfig:
     """Breakout trending on 1H — separate from ranging."""
     enabled: bool = True
-    adx_min: float = 35.0
+    adx_min: float = 30.0
     vol_mult: float = 1.2
     lookback: int = 10
     body_pct: float = 0.5

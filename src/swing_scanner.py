@@ -382,7 +382,7 @@ def score_swing_setup(
             signal.sd_zone_ok = True
             fresh_tag = "FRESH" if z.fresh else "TESTED"
             signal.sd_zone_detail = (
-                f"Daily {target_type} zone ${z.low:.2f}-${z.high:.2f} [{fresh_tag}]"
+                f"Daily {target_type} zone {_price_fmt(z.low)}-{_price_fmt(z.high)} [{fresh_tag}]"
             )
             break
 
@@ -397,7 +397,7 @@ def score_swing_setup(
                     signal.sd_zone_ok = True
                     fresh_tag = "FRESH" if z.fresh else "TESTED"
                     signal.sd_zone_detail = (
-                        f"H4 {target_type} zone ${z.low:.2f}-${z.high:.2f} [{fresh_tag}]"
+                        f"H4 {target_type} zone {_price_fmt(z.low)}-{_price_fmt(z.high)} [{fresh_tag}]"
                     )
                 break
 
@@ -424,10 +424,10 @@ def score_swing_setup(
         if fib_618 and fib_660:
             if side == "LONG" and fib_660 <= price <= fib_618:
                 signal.fib_ok = True
-                signal.fib_detail = f"Fib 0.618 at ${fib_618:.2f}"
+                signal.fib_detail = f"Fib 0.618 at {_price_fmt(fib_618)}"
             elif side == "SHORT" and fib_618 <= price <= fib_660:
                 signal.fib_ok = True
-                signal.fib_detail = f"Fib 0.618 at ${fib_618:.2f}"
+                signal.fib_detail = f"Fib 0.618 at {_price_fmt(fib_618)}"
 
     # ── Optional 5: RSI divergence ──
     div = detect_rsi_divergence(df_daily, 20)
@@ -541,44 +541,64 @@ def deduplicate(signals: list[SwingSignal]) -> list[SwingSignal]:
     return result
 
 
+def _price_fmt(price: float) -> str:
+    """Dynamic precision: $0.001234 → 4 decimals, $1.23 → 4, $123.4 → 2, $1234 → 1."""
+    if price <= 0:
+        return "$0"
+    if price < 0.01:
+        return f"${price:.6f}"
+    if price < 1:
+        return f"${price:.4f}"
+    if price < 100:
+        return f"${price:.4f}"
+    if price < 10000:
+        return f"${price:.2f}"
+    return f"${price:.1f}"
+
+
 def format_swing_telegram(signal: SwingSignal) -> str:
     coin = signal.symbol.split("/")[0]
+    pf = _price_fmt
+    side_emoji = "\U0001f7e2" if signal.side == "LONG" else "\U0001f534"
+
+    size_line = (
+        f"\U0001f4b0 Size: ${signal.size_usd:.0f} spot"
+        f" (risk ${signal.risk_usd:.0f} = {signal.risk_usd / signal.size_usd * 100:.0f}%)"
+        if signal.size_usd > 0 else f"\U0001f4b0 Size: $0 (risk ${signal.risk_usd:.0f})"
+    )
+
     lines = [
-        f"SWING {signal.side} {signal.symbol} ({signal.exchange.title()})",
+        f"{side_emoji} <b>SWING {signal.side} {coin}/USDT</b>  ({signal.exchange.upper()})",
         "",
-        f"Entry: ${signal.entry_low:.2f} - ${signal.entry_high:.2f}",
-        f"SL: ${signal.sl:.2f}",
-        f"TP1: ${signal.tp1:.2f} (R:R 1:{signal.rr1:.1f})",
-        f"TP2: ${signal.tp2:.2f} (R:R 1:{signal.rr2:.1f})",
+        f"\U0001f4cd Entry: {pf(signal.entry_low)} \u2013 {pf(signal.entry_high)}",
+        f"\U0001f6d1 SL: {pf(signal.sl)}",
+        f"\U0001f3af TP1: {pf(signal.tp1)}  (1:{signal.rr1:.1f})",
+        f"\U0001f3af TP2: {pf(signal.tp2)}  (1:{signal.rr2:.1f})",
+        size_line,
         "",
-        f"Size: ${signal.size_usd:.0f} (risk ${signal.risk_usd:.0f} = "
-        f"{signal.risk_usd / signal.size_usd * 100:.0f}%)"
-        if signal.size_usd > 0 else f"Size: $0 (risk ${signal.risk_usd:.0f})",
+        f"<b>\u2705 MANDATORY  3/3</b>",
+        f"  \u2022 {signal.ema_detail}",
+        f"  \u2022 {signal.sd_zone_detail}",
+        f"  \u2022 {signal.location_detail}",
         "",
-        f"MANDATORY (3/3):",
-        f"+ {signal.ema_detail}",
-        f"+ {signal.sd_zone_detail}",
-        f"+ {signal.location_detail}",
-        "",
-        f"OPTIONAL ({signal.optional_score}/5):",
+        f"<b>\u2b50 OPTIONAL  {signal.optional_score}/5</b>",
     ]
 
     optional_checks = [
         (signal.fib_ok, signal.fib_detail, "Fib golden pocket"),
         (signal.rsi_div_ok, signal.rsi_div_detail, "RSI divergence"),
-        (signal.pin_bar_ok, signal.pin_bar_detail, "Pin bar/engulfing"),
+        (signal.pin_bar_ok, signal.pin_bar_detail, "Pin bar / engulfing"),
         (signal.volume_ok, signal.volume_detail, "Volume above avg"),
         (signal.bos_ok, signal.bos_detail, "H4 BOS"),
     ]
     for ok, detail, fallback in optional_checks:
-        if ok:
-            lines.append(f"+ {detail}")
-        else:
-            lines.append(f"- No {fallback}")
+        mark = "\u2705" if ok else "\u274c"
+        text = detail if ok else f"No {fallback}"
+        lines.append(f"  {mark} {text}")
 
     if signal.bonus_notes:
         lines.append("")
-        lines.append(f"BONUS: {', '.join(signal.bonus_notes)}")
+        lines.append(f"\U0001f48e {', '.join(signal.bonus_notes)}")
 
     return "\n".join(lines)
 
