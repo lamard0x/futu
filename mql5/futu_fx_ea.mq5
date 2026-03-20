@@ -109,11 +109,11 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
             double profit = HistoryDealGetDouble(trans.deal, DEAL_PROFIT);
             double volume = HistoryDealGetDouble(trans.deal, DEAL_VOLUME);
             string reason = HistoryDealGetString(trans.deal, DEAL_COMMENT);
-            string emoji = profit >= 0 ? "✅" : "❌";
-            string msg = emoji + " <b>CLOSED " + symbol + "</b>\n"
-               + "PnL: $" + DoubleToString(profit, 2) + " | Vol: " + DoubleToString(volume, 2) + "\n"
-               + "Reason: " + reason + "\n"
-               + "Balance: $" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2);
+            string tag = profit >= 0 ? "WIN" : "LOSS";
+            string msg = "[FX] " + tag + " " + symbol + "\n"
+               + "PnL: " + DoubleToString(profit, 2) + " Vol: " + DoubleToString(volume, 2) + "\n"
+               + reason + "\n"
+               + "Bal: " + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2);
             SendTelegram(msg);
          }
       }
@@ -460,15 +460,14 @@ void OpenOrder(string side, double lots, double sl, double tp, string comment) {
    if (ok && result.retcode == TRADE_RETCODE_DONE) {
       Print("ORDER OK: ", comment, " ", lots, " lots @ ", result.price,
             " SL=", sl, " TP=", tp, " ticket=", result.order);
-      string emoji = (side == "buy") ? "🟢" : "🔴";
       double rr = (MathAbs(tp - result.price) > 0 && MathAbs(result.price - sl) > 0)
                   ? MathAbs(tp - result.price) / MathAbs(result.price - sl) : 0;
-      string msg = emoji + " <b>" + comment + "</b>\n"
-         + _Symbol + " @ " + DoubleToString(result.price, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)) + "\n"
-         + "SL: " + DoubleToString(sl, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS))
-         + " | TP: " + DoubleToString(tp, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)) + "\n"
-         + "Size: " + DoubleToString(lots, 2) + " lots | R:R 1:" + DoubleToString(rr, 1) + "\n"
-         + "Balance: $" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2);
+      int dig = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+      string msg = "[FX] " + comment + "\n"
+         + _Symbol + " @ " + DoubleToString(result.price, dig) + "\n"
+         + "SL: " + DoubleToString(sl, dig) + " TP: " + DoubleToString(tp, dig) + "\n"
+         + "Size: " + DoubleToString(lots, 2) + " lots RR 1:" + DoubleToString(rr, 1) + "\n"
+         + "Bal: " + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2);
       SendTelegram(msg);
    } else {
       Print("ORDER FAIL: ", comment, " retcode=", result.retcode,
@@ -495,17 +494,28 @@ void ModifySL(ulong ticket, double new_sl, double tp) {
 //+------------------------------------------------------------------+
 void SendTelegram(string msg) {
    if (!TG_Enabled || TG_BotToken == "" || TG_ChatID == "") return;
+
    string url = "https://api.telegram.org/bot" + TG_BotToken + "/sendMessage";
-   string params = "chat_id=" + TG_ChatID + "&text=" + msg + "&parse_mode=HTML";
+
+   // Build JSON body
+   StringReplace(msg, "\"", "'");
+   StringReplace(msg, "\n", "\\n");
+   string json = "{\"chat_id\":\"" + TG_ChatID + "\",\"text\":\"" + msg + "\"}";
 
    char post[];
-   char result[];
-   string headers = "Content-Type: application/x-www-form-urlencoded\r\n";
-   StringToCharArray(params, post);
+   StringToCharArray(json, post, 0, WHOLE_ARRAY, CP_UTF8);
 
-   int res = WebRequest("POST", url, headers, 5000, post, result, headers);
-   if (res != 200) {
-      Print("Telegram send failed: ", res);
+   char result[];
+   string resHeaders;
+   string reqHeaders = "Content-Type: application/json\r\n";
+
+   ResetLastError();
+   int res = WebRequest("POST", url, reqHeaders, 5000, post, result, resHeaders);
+   if (res == 200) {
+      Print("Telegram sent OK");
+   } else {
+      string errBody = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+      Print("Telegram failed: ", res, " err=", GetLastError(), " body=", errBody);
    }
 }
 
