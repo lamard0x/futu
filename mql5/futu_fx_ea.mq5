@@ -10,39 +10,15 @@
 
 //── Inputs ──
 input int    MagicNumber    = 202603;
-input double RiskPercent    = 2.0;     // Risk % per trade
-input double BalanceStart   = 199.0;   // Fixed sizing balance
 input int    Slippage       = 20;
+
+// Profile: 0 = Normal, 1 = Challenge (FundedNext)
+input int    TradingProfile = 0;       // 0=Normal, 1=Challenge
 
 // Telegram
 input string TG_BotToken    = "8719620921:AAHpOk-lWg8MAv2oUmhJlUhoQS4gjT3pfQk";
 input string TG_ChatID      = "1876038514";
 input bool   TG_Enabled     = true;
-
-// BB Ranging params
-input int    BB_Period      = 20;
-input double BB_StdDev      = 2.0;
-input double BB_TouchPct    = 0.8;     // BB touch tolerance %
-input int    RSI_Period     = 10;
-input double RSI_BullOS     = 42.0;    // RSI oversold (bullish bias)
-input double RSI_BullOB     = 58.0;    // RSI overbought (bullish bias)
-input double RSI_BearOS     = 35.0;
-input double RSI_BearOB     = 58.0;
-input double RSI_NeutOS     = 45.0;
-input double RSI_NeutOB     = 55.0;
-input double VolMult        = 0.4;     // Volume SMA multiplier
-input double RangingSL_ATR  = 0.5;     // SL in ATR multiples
-input double RangingMinRR   = 1.2;     // Min R:R for ranging
-input int    ADX_Period     = 14;
-input double ADX_Trending   = 35.0;    // ADX threshold (ranging < this)
-
-// Trending params
-input double TrendADX_Min   = 30.0;
-input double TrendVolMult   = 1.2;
-input int    TrendLookback  = 20;
-input double TrendBodyPct   = 0.5;
-input double TrendSL_ATR    = 1.5;
-input double TrendMinRR     = 1.5;
 
 // EMA params (for bias)
 input int    EMA_Fast       = 9;
@@ -52,9 +28,21 @@ input int    EMA_Mid        = 21;
 input double MaxSpreadPips     = 3.0;     // Max spread (pips) for FX pairs
 input double MaxSpreadPipsXAU  = 25.0;    // Max spread (pips) for XAU pairs
 
-// Trailing
-input double TrailBE_Pct    = 50.0;    // Move SL to BE at X% of TP distance
-input double PartialPct     = 50.0;    // Close X% at halfway to TP
+// Session hours (UTC) — declared here, will be set below
+input int    BB_Period      = 20;
+input double BB_StdDev      = 2.0;
+input int    RSI_Period     = 10;
+input int    ADX_Period     = 14;
+
+// ── Profile-dependent params (set in OnInit) ──
+double RiskPercent, BalanceStart;
+double BB_TouchPct, VolMult, RangingSL_ATR, RangingMinRR, ADX_Trending;
+double RSI_BullOS, RSI_BullOB, RSI_BearOS, RSI_BearOB, RSI_NeutOS, RSI_NeutOB;
+double TrendADX_Min, TrendVolMult, TrendBodyPct, TrendSL_ATR, TrendMinRR;
+int    TrendLookback;
+double TrailBE_Pct, PartialPct;
+double MaxDailyLossPct;
+int    MaxPositions;
 
 // Session hours (UTC)
 input int    AsianStart     = 0;
@@ -70,7 +58,61 @@ datetime lastRangingScan = 0;
 datetime lastTrendingScan = 0;
 
 //+------------------------------------------------------------------+
+void LoadProfile() {
+   if (TradingProfile == 1) {
+      // Challenge (FundedNext): conservative risk, protect drawdown
+      RiskPercent    = 1.5;
+      BalanceStart   = 0;       // use account balance
+      BB_TouchPct    = 0.8;
+      VolMult        = 0.4;
+      RangingSL_ATR  = 0.4;
+      RangingMinRR   = 1.3;
+      ADX_Trending   = 35.0;
+      RSI_BullOS     = 48.0;  RSI_BullOB = 56.0;
+      RSI_BearOS     = 40.0;  RSI_BearOB = 58.0;
+      RSI_NeutOS     = 48.0;  RSI_NeutOB = 56.0;
+      TrendADX_Min   = 30.0;
+      TrendVolMult   = 1.2;
+      TrendLookback  = 20;
+      TrendBodyPct   = 0.5;
+      TrendSL_ATR    = 1.2;
+      TrendMinRR     = 1.5;
+      TrailBE_Pct    = 40.0;
+      PartialPct     = 50.0;
+      MaxDailyLossPct = 4.0;   // 4% cap (FundedNext 5% rule, 1% buffer)
+      MaxPositions   = 4;
+      Print("Profile: CHALLENGE (FundedNext)");
+   } else {
+      // Normal: standard risk
+      RiskPercent    = 2.0;
+      BalanceStart   = 0;       // use account balance
+      BB_TouchPct    = 0.8;
+      VolMult        = 0.4;
+      RangingSL_ATR  = 0.5;
+      RangingMinRR   = 1.2;
+      ADX_Trending   = 35.0;
+      RSI_BullOS     = 48.0;  RSI_BullOB = 56.0;
+      RSI_BearOS     = 40.0;  RSI_BearOB = 58.0;
+      RSI_NeutOS     = 48.0;  RSI_NeutOB = 56.0;
+      TrendADX_Min   = 30.0;
+      TrendVolMult   = 1.2;
+      TrendLookback  = 20;
+      TrendBodyPct   = 0.5;
+      TrendSL_ATR    = 1.5;
+      TrendMinRR     = 1.5;
+      TrailBE_Pct    = 50.0;
+      PartialPct     = 50.0;
+      MaxDailyLossPct = 6.0;   // 6% daily cap
+      MaxPositions   = 10;
+      Print("Profile: NORMAL");
+   }
+   if (BalanceStart <= 0)
+      BalanceStart = AccountInfoDouble(ACCOUNT_BALANCE);
+}
+
 int OnInit() {
+   LoadProfile();
+
    // M5 indicators
    handleRSI    = iRSI(_Symbol, PERIOD_M5, RSI_Period, PRICE_CLOSE);
    handleBB     = iBands(_Symbol, PERIOD_M5, BB_Period, 0, BB_StdDev, PRICE_CLOSE);
@@ -137,6 +179,14 @@ void OnTick() {
 
    // Manage existing positions (trailing, partial close)
    ManagePositions();
+
+   // Daily loss cap — stop trading if exceeded
+   double dailyPnL = GetDailyPnL();
+   double dailyLossPct = (dailyPnL < 0) ? MathAbs(dailyPnL) / BalanceStart * 100.0 : 0;
+   if (dailyLossPct >= MaxDailyLossPct) return;
+
+   // Max positions cap
+   if (CountPositions() >= MaxPositions) return;
 
    // Already have position on this symbol?
    if (HasPosition()) return;
@@ -427,6 +477,45 @@ void GetRSIThresholds(string bias, double &os, double &ob) {
    if (bias == "bullish")  { os = RSI_BullOS; ob = RSI_BullOB; }
    else if (bias == "bearish") { os = RSI_BearOS; ob = RSI_BearOB; }
    else { os = RSI_NeutOS; ob = RSI_NeutOB; }
+}
+
+int CountPositions() {
+   int count = 0;
+   for (int i = PositionsTotal() - 1; i >= 0; i--) {
+      ulong ticket = PositionGetTicket(i);
+      if (ticket == 0) continue;
+      if (PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+         count++;
+   }
+   return count;
+}
+
+double GetDailyPnL() {
+   MqlDateTime dt;
+   TimeCurrent(dt);
+   datetime dayStart = StringToTime(StringFormat("%04d.%02d.%02d 00:00:00",
+                        dt.year, dt.mon, dt.day));
+   double pnl = 0;
+   // Closed deals today
+   HistorySelect(dayStart, TimeCurrent());
+   for (int i = HistoryDealsTotal() - 1; i >= 0; i--) {
+      ulong ticket = HistoryDealGetTicket(i);
+      if (ticket == 0) continue;
+      if (HistoryDealGetInteger(ticket, DEAL_MAGIC) == MagicNumber
+          && HistoryDealGetInteger(ticket, DEAL_ENTRY) == DEAL_ENTRY_OUT)
+         pnl += HistoryDealGetDouble(ticket, DEAL_PROFIT)
+              + HistoryDealGetDouble(ticket, DEAL_SWAP)
+              + HistoryDealGetDouble(ticket, DEAL_COMMISSION);
+   }
+   // Open positions floating PnL
+   for (int i = PositionsTotal() - 1; i >= 0; i--) {
+      ulong ticket = PositionGetTicket(i);
+      if (ticket == 0) continue;
+      if (PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+         pnl += PositionGetDouble(POSITION_PROFIT)
+              + PositionGetDouble(POSITION_SWAP);
+   }
+   return pnl;
 }
 
 bool HasPosition() {

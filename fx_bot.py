@@ -79,23 +79,73 @@ PIP_VALUE = {
     "AUDUSDm": 10.0, "GBPJPYm": 6.5,
 }
 
-# Risk
-RISK_RANGING = 0.02
-RISK_TRENDING = 0.02
 
-# TP/SL params
-RANGING_SL_ATR = 0.5
-RANGING_MIN_RR = 1.2
-TRENDING_SL_ATR = 1.5
-TRENDING_MIN_RR = 1.5
-TRAILING_BE_PCT = 0.50
-PARTIAL_CLOSE_PCT = 0.50
+# ═══ Trading Profiles ═══
+
+@dataclass
+class FXProfile:
+    name: str
+    risk_ranging: float
+    risk_trending: float
+    ranging_sl_atr: float
+    ranging_min_rr: float
+    trending_sl_atr: float
+    trending_min_rr: float
+    trailing_be_pct: float
+    partial_close_pct: float
+    t_adx_min: float
+    t_lookback: int
+    t_body_pct: float
+    t_vol_mult: float
+    max_daily_loss_pct: float  # safety cap: stop trading if daily loss exceeds this
+    max_positions: int
+
+
+PROFILES = {
+    "normal": FXProfile(
+        name="normal",
+        risk_ranging=0.02,
+        risk_trending=0.02,
+        ranging_sl_atr=0.5,
+        ranging_min_rr=1.2,
+        trending_sl_atr=1.5,
+        trending_min_rr=1.5,
+        trailing_be_pct=0.50,
+        partial_close_pct=0.50,
+        t_adx_min=30,
+        t_lookback=20,
+        t_body_pct=0.5,
+        t_vol_mult=1.2,
+        max_daily_loss_pct=0.06,   # 6% daily loss cap
+        max_positions=10,
+    ),
+    "challenge": FXProfile(
+        name="challenge",
+        risk_ranging=0.015,        # conservative: protect drawdown
+        risk_trending=0.015,
+        ranging_sl_atr=0.4,        # tighter SL
+        ranging_min_rr=1.3,        # higher R:R for better expectancy
+        trending_sl_atr=1.2,       # tighter SL
+        trending_min_rr=1.5,
+        trailing_be_pct=0.40,      # lock profit earlier
+        partial_close_pct=0.50,
+        t_adx_min=30,
+        t_lookback=20,
+        t_body_pct=0.5,
+        t_vol_mult=1.2,
+        max_daily_loss_pct=0.04,   # 4% daily cap (FundedNext = 5%, buffer 1%)
+        max_positions=4,           # limit exposure
+    ),
+}
+
+PROFILE_NAME = os.getenv("FX_PROFILE", "normal")
+PROFILE = PROFILES.get(PROFILE_NAME, PROFILES["normal"])
 
 # Trending detection
-T_ADX_MIN = 30
-T_LOOKBACK = 20
-T_BODY_PCT = 0.5
-T_VOL_MULT = 1.2
+T_ADX_MIN = PROFILE.t_adx_min
+T_LOOKBACK = PROFILE.t_lookback
+T_BODY_PCT = PROFILE.t_body_pct
+T_VOL_MULT = PROFILE.t_vol_mult
 
 # Scan intervals (seconds)
 TICK_INTERVAL = 30
@@ -451,11 +501,11 @@ def scan_ranging(row, prev_row, bias, cfg):
         opt_count = sum([opt_wick, opt_bullish, opt_rsi, opt_vol])
 
         if opt_count >= 3:
-            sl = close - RANGING_SL_ATR * atr
+            sl = close - PROFILE.ranging_sl_atr * atr
             tp = close + (bbm - close) * 0.50
             risk = abs(close - sl)
             reward = abs(tp - close)
-            if risk > 0 and reward / risk >= RANGING_MIN_RR:
+            if risk > 0 and reward / risk >= PROFILE.ranging_min_rr:
                 return {
                     "side": "long", "entry": close, "sl": sl, "tp": tp,
                     "reason": f"RANGING LONG | RSI={rsi:.0f} ADX={adx:.0f}",
@@ -478,11 +528,11 @@ def scan_ranging(row, prev_row, bias, cfg):
         opt_count = sum([opt_wick, opt_bearish, opt_rsi, opt_vol])
 
         if opt_count >= 3:
-            sl = close + RANGING_SL_ATR * atr
+            sl = close + PROFILE.ranging_sl_atr * atr
             tp = close - (close - bbm) * 0.50
             risk = abs(close - sl)
             reward = abs(tp - close)
-            if risk > 0 and reward / risk >= RANGING_MIN_RR:
+            if risk > 0 and reward / risk >= PROFILE.ranging_min_rr:
                 return {
                     "side": "short", "entry": close, "sl": sl, "tp": tp,
                     "reason": f"RANGING SHORT | RSI={rsi:.0f} ADX={adx:.0f}",
@@ -530,7 +580,7 @@ def scan_trending(row, prev_row, df_slice, bias):
     recent_high = recent["high"].max()
     recent_low = recent["low"].min()
 
-    sl_dist = TRENDING_SL_ATR * atr
+    sl_dist = PROFILE.trending_sl_atr * atr
 
     # LONG breakout
     if (plus_di > minus_di and close > recent_high and close > opn
@@ -540,7 +590,7 @@ def scan_trending(row, prev_row, df_slice, bias):
         sl = min(sl, close - 0.5 * atr)
         risk = abs(close - sl)
         tp = close + 2.0 * risk
-        if risk > 0 and (tp - close) / risk >= TRENDING_MIN_RR:
+        if risk > 0 and (tp - close) / risk >= PROFILE.trending_min_rr:
             return {
                 "side": "long", "entry": close, "sl": sl, "tp": tp,
                 "reason": f"TREND LONG | ADX={adx:.0f} RSI={rsi:.0f}",
@@ -554,7 +604,7 @@ def scan_trending(row, prev_row, df_slice, bias):
         sl = max(sl, close + 0.5 * atr)
         risk = abs(close - sl)
         tp = close - 2.0 * risk
-        if risk > 0 and (close - tp) / risk >= TRENDING_MIN_RR:
+        if risk > 0 and (close - tp) / risk >= PROFILE.trending_min_rr:
             return {
                 "side": "short", "entry": close, "sl": sl, "tp": tp,
                 "reason": f"TREND SHORT | ADX={adx:.0f} RSI={rsi:.0f}",
@@ -592,7 +642,7 @@ def check_trailing_and_partial(trade: LiveTrade, state: BotState):
     pos = positions[0]
     current_price = pos.price_current
     tp_dist = abs(trade.tp_price - trade.entry_price)
-    half_tp_dist = tp_dist * TRAILING_BE_PCT
+    half_tp_dist = tp_dist * PROFILE.trailing_be_pct
 
     if trade.side == "long":
         half_tp_level = trade.entry_price + half_tp_dist
@@ -606,7 +656,7 @@ def check_trailing_and_partial(trade: LiveTrade, state: BotState):
 
     # Partial close at 50% TP
     if not trade.partial_closed:
-        close_lots = round(trade.lots * PARTIAL_CLOSE_PCT, 2)
+        close_lots = round(trade.lots * PROFILE.partial_close_pct, 2)
         if close_lots >= 0.01:
             ok = close_partial(trade.ticket, trade.symbol, close_lots)
             if ok:
@@ -725,7 +775,9 @@ async def notify_startup(state: BotState):
         f"Balance: ${state.balance:.2f}\n"
         f"Ranging: {', '.join(ASIAN_SYMBOLS)}\n"
         f"Trending: {', '.join(TRENDING_SYMBOLS)}\n"
-        f"Risk: {RISK_RANGING*100:.0f}% ranging / {RISK_TRENDING*100:.0f}% trending"
+        f"Profile: {PROFILE.name.upper()}\n"
+        f"Risk: {PROFILE.risk_ranging*100:.1f}% ranging / {PROFILE.risk_trending*100:.1f}% trending\n"
+        f"Daily loss cap: {PROFILE.max_daily_loss_pct*100:.0f}% | Max positions: {PROFILE.max_positions}"
     )
     await send_message(text)
 
@@ -775,8 +827,11 @@ class FXBot:
             log.info("BALANCE_START set from account: %.2f", BALANCE_START)
         self.state.balance_start = BALANCE_START
 
-        log.info("Account balance: %.2f | BALANCE_START: %.2f",
-                 self.state.balance, BALANCE_START)
+        log.info("Profile: %s | Balance: %.2f | BALANCE_START: %.2f",
+                 PROFILE.name.upper(), self.state.balance, BALANCE_START)
+        log.info("Risk: %.1f%% | Daily cap: %.0f%% | Max pos: %d",
+                 PROFILE.risk_ranging * 100, PROFILE.max_daily_loss_pct * 100,
+                 PROFILE.max_positions)
 
         await notify_startup(self.state)
 
@@ -837,6 +892,18 @@ class FXBot:
         # Skip scanning on weekends
         if is_weekend():
             return
+
+        # Daily loss cap — stop trading if exceeded
+        if self.state.balance_start > 0:
+            daily_loss = self.state.daily.pnl
+            daily_loss_pct = abs(daily_loss) / self.state.balance_start if daily_loss < 0 else 0
+            if daily_loss_pct >= PROFILE.max_daily_loss_pct:
+                return  # stop scanning, only monitor exits
+
+        # Max positions cap
+        open_count = len(get_open_positions())
+        if open_count >= PROFILE.max_positions:
+            return  # only monitor exits, no new trades
 
         # H4 bias update every 15 min
         if now - self.state.last_bias_update >= BIAS_H4_INTERVAL:
@@ -900,7 +967,7 @@ class FXBot:
 
                 # Calculate lot size
                 lots = calc_lot_size(
-                    sig["entry"], sig["sl"], RISK_RANGING,
+                    sig["entry"], sig["sl"], PROFILE.risk_ranging,
                     symbol, BALANCE_START,
                 )
                 if lots <= 0:
@@ -956,7 +1023,7 @@ class FXBot:
                     continue
 
                 lots = calc_lot_size(
-                    sig["entry"], sig["sl"], RISK_TRENDING,
+                    sig["entry"], sig["sl"], PROFILE.risk_trending,
                     symbol, BALANCE_START,
                 )
                 if lots <= 0:
