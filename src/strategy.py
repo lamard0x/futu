@@ -541,9 +541,10 @@ def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias,
     ema_m = confirm.get("ema_21") or 0
     ema_s = confirm.get("ema_50") or 0
 
-    if atr <= 0 or adx < cfg.adx_min:
-        logger.debug("SKIP PB %s: ADX %.0f < %s", symbol, adx, cfg.adx_min)
+    if atr <= 0:
         return None
+    # ADX removed as requirement — DI alignment + EMA order already confirms trend
+    # ADX is too lagging for catching early pullbacks
 
     # Touch candle (one before confirmation)
     touch = df.iloc[-3]
