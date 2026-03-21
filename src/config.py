@@ -48,11 +48,11 @@ class StrategyConfig:
     volume_trend_mult: float = 1.0
 
     # Ranging mode entry — RSI Hayden zones (adjusted for RSI period 10)
-    rsi_oversold: float = 46.0       # neutral
+    rsi_oversold: float = 48.0       # neutral
     rsi_overbought: float = 56.0     # neutral
-    rsi_bull_oversold: float = 46.0   # bullish bias
+    rsi_bull_oversold: float = 48.0   # bullish bias
     rsi_bull_overbought: float = 56.0 # bullish bias
-    rsi_bear_oversold: float = 38.0   # bearish bias
+    rsi_bear_oversold: float = 40.0   # bearish bias
     rsi_bear_overbought: float = 58.0 # bearish bias
     bb_touch_pct: float = 0.8
     volume_range_mult: float = 0.4

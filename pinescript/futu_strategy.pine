@@ -21,11 +21,11 @@ sl_range_mult  = input.float(0.5, "SL Ranging ATR Mult")
 sl_trend_mult  = input.float(1.5, "SL Trending ATR Mult")
 
 // RSI Hayden zones
-rsi_bull_os  = input.float(46.0, "RSI Bull Oversold", group="RSI Hayden")
+rsi_bull_os  = input.float(48.0, "RSI Bull Oversold", group="RSI Hayden")
 rsi_bull_ob  = input.float(56.0, "RSI Bull Overbought", group="RSI Hayden")
-rsi_bear_os  = input.float(38.0, "RSI Bear Oversold", group="RSI Hayden")
+rsi_bear_os  = input.float(40.0, "RSI Bear Oversold", group="RSI Hayden")
 rsi_bear_ob  = input.float(58.0, "RSI Bear Overbought", group="RSI Hayden")
-rsi_neut_os  = input.float(46.0, "RSI Neutral Oversold", group="RSI Hayden")
+rsi_neut_os  = input.float(48.0, "RSI Neutral Oversold", group="RSI Hayden")
 rsi_neut_ob  = input.float(56.0, "RSI Neutral Overbought", group="RSI Hayden")
 
 // Demand/Supply zone inputs
