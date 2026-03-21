@@ -259,19 +259,27 @@ void ScanRanging() {
    double oversold, overbought;
    GetRSIThresholds(bias, oversold, overbought);
 
+   // RSI direction filter
+   double rsi_prev[];
+   CopyBuffer(handleRSI, 0, 2, 1, rsi_prev);
+
    // Volume check (tick volume)
    long vol1 = iTickVolume(_Symbol, PERIOD_M5, 1);
    long vol_avg = 0;
    for (int i = 1; i <= 20; i++) vol_avg += iTickVolume(_Symbol, PERIOD_M5, i);
    vol_avg /= 20;
 
-   // ── LONG ──
+   // RSI direction flags
+   bool rsi_rising = rsi[0] >= rsi_prev[0];
+   bool rsi_falling = rsi[0] <= rsi_prev[0];
+
+   // ── LONG (RSI must be rising) ──
    bool touch_lower = low1 <= bb_lower[0] * (1 + BB_TouchPct / 100);
    bool close_inside = close1 > bb_lower[0];
    bool prev_above = close2 > prev_bbl[0];
    bool mid_room = bb_mid[0] > close1;
 
-   if (touch_lower && close_inside && prev_above && mid_room) {
+   if (rsi_rising && touch_lower && close_inside && prev_above && mid_room) {
       double lower_wick = MathMin(close1, open1) - low1;
       double wick_pct = lower_wick / candle_range;
 
@@ -301,7 +309,7 @@ void ScanRanging() {
    bool prev_below = close2 < prev_bbu[0];
    bool mid_room_s = bb_mid[0] < close1;
 
-   if (touch_upper && close_inside_s && prev_below && mid_room_s) {
+   if (rsi_falling && touch_upper && close_inside_s && prev_below && mid_room_s) {
       double upper_wick = high1 - MathMax(close1, open1);
       double wick_pct = upper_wick / candle_range;
 

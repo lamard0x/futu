@@ -483,8 +483,12 @@ def scan_ranging(row, prev_row, bias, cfg):
     p_bbu = prev_row.get("bb_upper") or 0
 
     oversold, overbought = get_rsi_thresholds(cfg, bias)
+    rsi_prev = prev_row.get("rsi") or 0
 
-    # LONG
+    # LONG — RSI must be rising (no catching falling knives)
+    if rsi < rsi_prev:
+        return None
+
     touch_lower = low <= bbl * (1 + cfg.bb_touch_pct / 100)
     close_inside_long = close > bbl + bb_width * 0.25
     prev_above_bb = p_close > p_bbl if p_bbl > 0 else True
@@ -511,7 +515,10 @@ def scan_ranging(row, prev_row, bias, cfg):
                     "reason": f"RANGING LONG | RSI={rsi:.0f} ADX={adx:.0f}",
                 }
 
-    # SHORT
+    # SHORT — RSI must be falling (no selling into pumps)
+    if rsi > rsi_prev:
+        return None
+
     touch_upper = high >= bbu * (1 - cfg.bb_touch_pct / 100)
     close_inside_short = close < bbu - bb_width * 0.25
     prev_below_bb = p_close < p_bbu if p_bbu > 0 else True
