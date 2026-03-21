@@ -193,11 +193,13 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
             logger.info("PUMP MODE %s: +%.1f%% in 4 candles — LONG as with-trend", symbol, pct_pump)
 
     row = df.iloc[-2]  # Use closed candle — live candle wick/close unreliable
+    prev_row_rsi = df.iloc[-3] if len(df) >= 4 else row
     close = row["close"]
     opn = row["open"]
     low = row["low"]
     high = row["high"]
     rsi = row["rsi"]
+    rsi_prev = prev_row_rsi["rsi"]
     bb_lower = row["bb_lower"]
     bb_mid = row["bb_mid"]
     volume = row["volume"]
@@ -207,6 +209,11 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
     candle_range = high - low
     lower_wick = min(close, opn) - low
     wick_pct = lower_wick / candle_range if candle_range > 0 else 0
+
+    # RSI direction — LONG requires RSI rising (momentum turning up)
+    if rsi < rsi_prev:
+        logger.debug("SKIP LONG %s: RSI falling %.0f < %.0f (no reversal)", symbol, rsi, rsi_prev)
+        return None
 
     # ── Mandatory conditions (all must pass) ──
     touch_lower = low <= bb_lower * (1 + cfg.bb_touch_pct / 100)
@@ -323,11 +330,13 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
             logger.info("DUMP MODE %s: %.1f%% drop in 4 candles — SHORT as with-trend", symbol, pct_drop)
 
     row = df.iloc[-2]  # Use closed candle — live candle wick/close unreliable
+    prev_row_rsi = df.iloc[-3] if len(df) >= 4 else row
     close = row["close"]
     opn = row["open"]
     low = row["low"]
     high = row["high"]
     rsi = row["rsi"]
+    rsi_prev = prev_row_rsi["rsi"]
     bb_upper = row["bb_upper"]
     bb_mid = row["bb_mid"]
     volume = row["volume"]
@@ -337,6 +346,11 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
     candle_range = high - low
     upper_wick = high - max(close, opn)
     wick_pct = upper_wick / candle_range if candle_range > 0 else 0
+
+    # RSI direction — SHORT requires RSI falling (momentum turning down)
+    if rsi > rsi_prev:
+        logger.debug("SKIP SHORT %s: RSI rising %.0f > %.0f (no reversal)", symbol, rsi, rsi_prev)
+        return None
 
     # ── Mandatory conditions (all must pass) ──
     touch_upper = high >= bb_upper * (1 - cfg.bb_touch_pct / 100)

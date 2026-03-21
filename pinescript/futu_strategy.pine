@@ -230,8 +230,8 @@ r_short_mandatory = c_high >= bb_upper[1] * (1 - bb_touch_pct / 100) and c_close
 // Anti-breakout: prev candle (index 2 = closed-1) must be inside BB
 r_long_anti_brk  = close[2] > ta.sma(close, bb_period)[2] - bb_std * ta.stdev(close, bb_period)[2]
 r_short_anti_brk = close[2] < ta.sma(close, bb_period)[2] + bb_std * ta.stdev(close, bb_period)[2]
-r_long_mandatory  := r_long_mandatory  and r_long_anti_brk
-r_short_mandatory := r_short_mandatory and r_short_anti_brk
+r_long_mandatory  := r_long_mandatory  and r_long_anti_brk  and rsi_val[1] >= rsi_val[2]  // RSI rising
+r_short_mandatory := r_short_mandatory and r_short_anti_brk and rsi_val[1] <= rsi_val[2]  // RSI falling
 
 // Optional conditions (count 0-4) — ranging needs 3/4 min (90%)
 r_long_opt_wick   = c_lower_wick_pct >= 0.12
