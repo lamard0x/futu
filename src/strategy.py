@@ -541,10 +541,15 @@ def scan_trending_pullback(df: pd.DataFrame, cfg: TrendingConfig, bias: HTFBias,
     ema_m = confirm.get("ema_21") or 0
     ema_s = confirm.get("ema_50") or 0
 
-    if atr <= 0:
+    prev_confirm = df.iloc[-3] if len(df) >= 4 else confirm
+    prev_adx = prev_confirm.get("adx") or 0
+    adx_rising = adx > prev_adx
+    if atr <= 0 or adx < 20 or not adx_rising:
+        if adx < 20:
+            logger.debug("SKIP PB %s: ADX %.0f < 20", symbol, adx)
+        elif not adx_rising:
+            logger.debug("SKIP PB %s: ADX %.0f falling (prev %.0f)", symbol, adx, prev_adx)
         return None
-    # ADX removed as requirement — DI alignment + EMA order already confirms trend
-    # ADX is too lagging for catching early pullbacks
 
     # Touch candle (one before confirmation)
     touch = df.iloc[-3]
