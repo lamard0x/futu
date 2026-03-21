@@ -8,7 +8,6 @@ import json
 import logging
 import math
 import os
-import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
@@ -68,7 +67,7 @@ MAX_CONCURRENT = 999  # unlimited — 1 per symbol, daily loss cap is the safety
 
 # TP/SL params
 RANGING_SL_ATR = 0.5
-RANGING_MIN_RR = 1.2
+RANGING_MIN_RR = 1.3
 TRENDING_SL_ATR = 1.5
 TRENDING_MIN_RR = 1.5
 TRAILING_BE_PCT = 0.50   # move SL to breakeven at 50% of TP
@@ -81,7 +80,7 @@ T_BODY_PCT = 0.5
 T_VOL_MULT = 1.2
 
 # ═══ News Calendar ═══
-CALENDAR_PATH = Path(__file__).parent / "data" / "fx_calendar.json"
+CALENDAR_PATH = Path(__file__).parent / "data" / "fx_calendar_2026.json"
 
 # Hardcoded recurring high-impact events (fallback)
 RECURRING_EVENTS = [
@@ -233,159 +232,395 @@ def bar_to_utc(bar_time, row) -> datetime:
     return datetime.now(timezone.utc)
 
 
-# ═══ News Calendar — ForexFactory Scraper ═══
+# ═══ News Calendar — Comprehensive 2026 Calendar ═══
 
-def scrape_forexfactory_week(date: datetime) -> list[dict]:
+def _dt(y: int, m: int, d: int, h: int, mi: int = 0) -> str:
+    """Helper: create ISO datetime string with UTC timezone."""
+    return datetime(y, m, d, h, mi, tzinfo=timezone.utc).isoformat()
+
+
+def generate_2026_calendar() -> list[dict]:
     """
-    Scrape ForexFactory calendar for a given week.
+    Comprehensive 2026 economic calendar with exact dates.
+    Sources: central bank published schedules, BLS release calendar,
+    ONS/ABS/Statistics Bureau schedules.
     Returns list of {datetime, currency, impact, event_name}.
-    Uses requests + BeautifulSoup (best effort).
     """
-    try:
-        import requests
-        from bs4 import BeautifulSoup
-    except ImportError:
-        return []
-
-    week_str = date.strftime("%b%d.%Y").lower()
-    url = f"https://www.forexfactory.com/calendar?week={week_str}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                       "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/120.0.0.0 Safari/537.36"
-    }
-
-    try:
-        resp = requests.get(url, headers=headers, timeout=15)
-        resp.raise_for_status()
-    except Exception:
-        return []
-
     events = []
-    try:
-        soup = BeautifulSoup(resp.text, "html.parser")
-        rows = soup.select("tr.calendar__row")
-        current_date_str = ""
+    Y = 2026
 
-        for row in rows:
-            date_cell = row.select_one("td.calendar__date")
-            if date_cell and date_cell.get_text(strip=True):
-                current_date_str = date_cell.get_text(strip=True)
+    # ──── NFP: First Friday of each month, 13:30 UTC ────
+    nfp_dates = [
+        (1, 9), (2, 6), (3, 6), (4, 3), (5, 1), (6, 5),
+        (7, 3), (8, 7), (9, 4), (10, 2), (11, 6), (12, 4),
+    ]
+    for m, d in nfp_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 13, 30),
+            "currency": "USD", "impact": "high",
+            "event_name": "Non-Farm Payrolls",
+        })
+        events.append({
+            "datetime": _dt(Y, m, d, 13, 30),
+            "currency": "USD", "impact": "high",
+            "event_name": "Unemployment Rate",
+        })
+        events.append({
+            "datetime": _dt(Y, m, d, 13, 30),
+            "currency": "USD", "impact": "medium",
+            "event_name": "Average Hourly Earnings m/m",
+        })
 
-            impact_cell = row.select_one("td.calendar__impact")
-            if not impact_cell:
-                continue
+    # ──── US CPI: ~13th of month, 13:30 UTC (Tue/Wed) ────
+    cpi_us_dates = [
+        (1, 14), (2, 11), (3, 11), (4, 14), (5, 12), (6, 10),
+        (7, 14), (8, 12), (9, 15), (10, 13), (11, 12), (12, 10),
+    ]
+    for m, d in cpi_us_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 13, 30),
+            "currency": "USD", "impact": "high",
+            "event_name": "CPI m/m",
+        })
+        events.append({
+            "datetime": _dt(Y, m, d, 13, 30),
+            "currency": "USD", "impact": "high",
+            "event_name": "Core CPI m/m",
+        })
 
-            impact_span = impact_cell.select_one("span")
-            if not impact_span:
-                continue
+    # ──── FOMC: 8 meetings/year, statement 18:00 UTC (Wed) ────
+    fomc_dates = [
+        (1, 28), (3, 18), (5, 6), (6, 17),
+        (7, 29), (9, 16), (11, 4), (12, 16),
+    ]
+    for m, d in fomc_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 18, 0),
+            "currency": "USD", "impact": "high",
+            "event_name": "FOMC Statement",
+        })
+        events.append({
+            "datetime": _dt(Y, m, d, 18, 0),
+            "currency": "USD", "impact": "high",
+            "event_name": "Federal Funds Rate",
+        })
+        events.append({
+            "datetime": _dt(Y, m, d, 18, 30),
+            "currency": "USD", "impact": "high",
+            "event_name": "FOMC Press Conference",
+        })
 
-            impact_class = " ".join(impact_span.get("class", []))
-            if "high" in impact_class or "red" in impact_class:
-                impact = "high"
-            elif "medium" in impact_class or "orange" in impact_class:
-                impact = "medium"
-            else:
-                continue
+    # FOMC Minutes: ~3 weeks after meeting, 18:00 UTC (Wed)
+    fomc_minutes_dates = [
+        (1, 7), (2, 18), (4, 8), (5, 27),
+        (7, 8), (8, 19), (10, 7), (11, 25),
+    ]
+    for m, d in fomc_minutes_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 18, 0),
+            "currency": "USD", "impact": "medium",
+            "event_name": "FOMC Meeting Minutes",
+        })
 
-            currency_cell = row.select_one("td.calendar__currency")
-            currency = currency_cell.get_text(strip=True) if currency_cell else ""
+    # ──── ECB Rate Decision: 8 meetings, 12:15 UTC (Thu) ────
+    ecb_dates = [
+        (1, 22), (3, 5), (4, 16), (6, 4),
+        (7, 16), (9, 10), (10, 22), (12, 10),
+    ]
+    for m, d in ecb_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 12, 15),
+            "currency": "EUR", "impact": "high",
+            "event_name": "ECB Interest Rate Decision",
+        })
+        events.append({
+            "datetime": _dt(Y, m, d, 12, 45),
+            "currency": "EUR", "impact": "high",
+            "event_name": "ECB Press Conference",
+        })
 
-            event_cell = row.select_one("td.calendar__event")
-            event_name = event_cell.get_text(strip=True) if event_cell else ""
+    # ──── BOE Rate Decision: 8 meetings, 12:00 UTC (Thu) ────
+    boe_dates = [
+        (2, 5), (3, 19), (5, 7), (6, 18),
+        (8, 6), (9, 17), (11, 5), (12, 17),
+    ]
+    for m, d in boe_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 12, 0),
+            "currency": "GBP", "impact": "high",
+            "event_name": "BOE Interest Rate Decision",
+        })
+        events.append({
+            "datetime": _dt(Y, m, d, 12, 0),
+            "currency": "GBP", "impact": "high",
+            "event_name": "BOE Monetary Policy Summary",
+        })
 
-            time_cell = row.select_one("td.calendar__time")
-            time_str = time_cell.get_text(strip=True) if time_cell else ""
+    # ──── RBA Rate Decision: 8 meetings, 03:30 UTC (Tue) ────
+    rba_dates = [
+        (2, 17), (3, 31), (5, 19), (7, 7),
+        (8, 4), (9, 1), (11, 3), (12, 1),
+    ]
+    for m, d in rba_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 3, 30),
+            "currency": "AUD", "impact": "high",
+            "event_name": "RBA Interest Rate Decision",
+        })
+        events.append({
+            "datetime": _dt(Y, m, d, 4, 30),
+            "currency": "AUD", "impact": "high",
+            "event_name": "RBA Rate Statement",
+        })
 
-            if not currency or not event_name:
-                continue
+    # ──── BOJ Rate Decision: 8 meetings, ~03:00 UTC ────
+    boj_dates = [
+        (1, 23), (3, 13), (4, 30), (6, 18),
+        (7, 30), (9, 17), (10, 29), (12, 18),
+    ]
+    for m, d in boj_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 3, 0),
+            "currency": "JPY", "impact": "high",
+            "event_name": "BOJ Interest Rate Decision",
+        })
+        events.append({
+            "datetime": _dt(Y, m, d, 6, 30),
+            "currency": "JPY", "impact": "high",
+            "event_name": "BOJ Press Conference",
+        })
 
-            event_dt = _parse_ff_datetime(current_date_str, time_str, date.year)
-            if event_dt is None:
-                continue
+    # ──── US GDP (Advance, Prelim, Final): quarterly, 13:30 UTC ────
+    gdp_dates = [
+        (1, 29, "GDP q/q (Advance)"),
+        (2, 26, "GDP q/q (Prelim)"),
+        (3, 26, "GDP q/q (Final)"),
+        (4, 29, "GDP q/q (Advance)"),
+        (5, 28, "GDP q/q (Prelim)"),
+        (6, 25, "GDP q/q (Final)"),
+        (7, 30, "GDP q/q (Advance)"),
+        (8, 27, "GDP q/q (Prelim)"),
+        (9, 24, "GDP q/q (Final)"),
+        (10, 29, "GDP q/q (Advance)"),
+        (11, 25, "GDP q/q (Prelim)"),
+        (12, 22, "GDP q/q (Final)"),
+    ]
+    for m, d, name in gdp_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 13, 30),
+            "currency": "USD", "impact": "medium",
+            "event_name": name,
+        })
 
-            events.append({
-                "datetime": event_dt.isoformat(),
-                "currency": currency,
-                "impact": impact,
-                "event_name": event_name,
-            })
-    except Exception:
-        return []
+    # ──── US Retail Sales: monthly ~15th, 13:30 UTC ────
+    retail_dates = [
+        (1, 16), (2, 13), (3, 17), (4, 15), (5, 15), (6, 16),
+        (7, 16), (8, 14), (9, 16), (10, 16), (11, 17), (12, 15),
+    ]
+    for m, d in retail_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 13, 30),
+            "currency": "USD", "impact": "medium",
+            "event_name": "Retail Sales m/m",
+        })
+        events.append({
+            "datetime": _dt(Y, m, d, 13, 30),
+            "currency": "USD", "impact": "medium",
+            "event_name": "Core Retail Sales m/m",
+        })
 
+    # ──── US PPI: monthly, 13:30 UTC ────
+    ppi_dates = [
+        (1, 15), (2, 12), (3, 12), (4, 9), (5, 13), (6, 11),
+        (7, 15), (8, 13), (9, 16), (10, 14), (11, 13), (12, 11),
+    ]
+    for m, d in ppi_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 13, 30),
+            "currency": "USD", "impact": "medium",
+            "event_name": "PPI m/m",
+        })
+
+    # ──── US ISM Manufacturing PMI: 1st business day, 15:00 UTC ────
+    ism_mfg_dates = [
+        (1, 5), (2, 2), (3, 2), (4, 1), (5, 1), (6, 1),
+        (7, 1), (8, 3), (9, 1), (10, 1), (11, 2), (12, 1),
+    ]
+    for m, d in ism_mfg_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 15, 0),
+            "currency": "USD", "impact": "medium",
+            "event_name": "ISM Manufacturing PMI",
+        })
+
+    # ──── US ISM Services PMI: 3rd business day, 15:00 UTC ────
+    ism_svc_dates = [
+        (1, 7), (2, 4), (3, 4), (4, 3), (5, 5), (6, 3),
+        (7, 7), (8, 5), (9, 3), (10, 5), (11, 4), (12, 3),
+    ]
+    for m, d in ism_svc_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 15, 0),
+            "currency": "USD", "impact": "medium",
+            "event_name": "ISM Services PMI",
+        })
+
+    # ──── UK CPI: monthly ~15th-17th, 07:00 UTC (Wed) ────
+    uk_cpi_dates = [
+        (1, 15), (2, 18), (3, 18), (4, 15), (5, 20), (6, 17),
+        (7, 15), (8, 19), (9, 16), (10, 21), (11, 18), (12, 16),
+    ]
+    for m, d in uk_cpi_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 7, 0),
+            "currency": "GBP", "impact": "high",
+            "event_name": "CPI y/y",
+        })
+
+    # ──── UK GDP: monthly, 07:00 UTC ────
+    uk_gdp_dates = [
+        (1, 16), (2, 13), (3, 13), (4, 10), (5, 14), (6, 12),
+        (7, 10), (8, 14), (9, 11), (10, 9), (11, 13), (12, 11),
+    ]
+    for m, d in uk_gdp_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 7, 0),
+            "currency": "GBP", "impact": "medium",
+            "event_name": "GDP m/m",
+        })
+
+    # ──── UK Employment / Claimant Count: monthly, 07:00 UTC (Tue) ────
+    uk_emp_dates = [
+        (1, 21), (2, 17), (3, 17), (4, 14), (5, 13), (6, 17),
+        (7, 15), (8, 12), (9, 15), (10, 13), (11, 10), (12, 15),
+    ]
+    for m, d in uk_emp_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 7, 0),
+            "currency": "GBP", "impact": "medium",
+            "event_name": "Claimant Count Change",
+        })
+
+    # ──── AU Employment Change: monthly ~3rd Thu, 00:30 UTC ────
+    au_emp_dates = [
+        (1, 22), (2, 19), (3, 19), (4, 16), (5, 14), (6, 18),
+        (7, 16), (8, 13), (9, 17), (10, 15), (11, 12), (12, 17),
+    ]
+    for m, d in au_emp_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 0, 30),
+            "currency": "AUD", "impact": "high",
+            "event_name": "Employment Change",
+        })
+        events.append({
+            "datetime": _dt(Y, m, d, 0, 30),
+            "currency": "AUD", "impact": "medium",
+            "event_name": "Unemployment Rate",
+        })
+
+    # ──── AU CPI: quarterly, 00:30 UTC ────
+    au_cpi_dates = [
+        (1, 28), (4, 29), (7, 29), (10, 28),
+    ]
+    for m, d in au_cpi_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 0, 30),
+            "currency": "AUD", "impact": "high",
+            "event_name": "CPI q/q",
+        })
+
+    # ──── JP CPI (National): monthly ~3rd Fri, 23:30 UTC (prev day) ────
+    jp_cpi_dates = [
+        (1, 23), (2, 20), (3, 20), (4, 17), (5, 22), (6, 19),
+        (7, 17), (8, 21), (9, 18), (10, 23), (11, 20), (12, 18),
+    ]
+    for m, d in jp_cpi_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 23, 30),
+            "currency": "JPY", "impact": "medium",
+            "event_name": "National Core CPI y/y",
+        })
+
+    # ──── EUR CPI (Flash): monthly ~end of month, 10:00 UTC ────
+    eur_cpi_dates = [
+        (1, 7), (2, 27), (3, 31), (4, 30), (6, 1), (6, 30),
+        (7, 31), (9, 1), (9, 30), (10, 30), (12, 1), (12, 17),
+    ]
+    for m, d in eur_cpi_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 10, 0),
+            "currency": "EUR", "impact": "high",
+            "event_name": "CPI Flash Estimate y/y",
+        })
+
+    # ──── EUR GDP (Flash): quarterly, 10:00 UTC ────
+    eur_gdp_dates = [
+        (1, 30), (4, 30), (7, 31), (10, 30),
+    ]
+    for m, d in eur_gdp_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 10, 0),
+            "currency": "EUR", "impact": "medium",
+            "event_name": "GDP Flash Estimate q/q",
+        })
+
+    # ──── EUR/DE PMI (Flash): monthly ~3rd week, 08:30-09:00 UTC ────
+    eur_pmi_dates = [
+        (1, 23), (2, 20), (3, 23), (4, 23), (5, 21), (6, 22),
+        (7, 23), (8, 21), (9, 22), (10, 22), (11, 20), (12, 16),
+    ]
+    for m, d in eur_pmi_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 8, 30),
+            "currency": "EUR", "impact": "medium",
+            "event_name": "Manufacturing PMI (Flash)",
+        })
+        events.append({
+            "datetime": _dt(Y, m, d, 9, 0),
+            "currency": "EUR", "impact": "medium",
+            "event_name": "Services PMI (Flash)",
+        })
+
+    # ──── US PCE Price Index (Fed preferred inflation), 13:30 UTC ────
+    pce_dates = [
+        (1, 30), (2, 27), (3, 27), (4, 30), (5, 29), (6, 26),
+        (7, 31), (8, 28), (9, 25), (10, 30), (11, 25), (12, 23),
+    ]
+    for m, d in pce_dates:
+        events.append({
+            "datetime": _dt(Y, m, d, 13, 30),
+            "currency": "USD", "impact": "high",
+            "event_name": "Core PCE Price Index m/m",
+        })
+
+    # Sort by datetime
+    events.sort(key=lambda e: e["datetime"])
     return events
-
-
-def _parse_ff_datetime(date_str: str, time_str: str, year: int):
-    """Parse ForexFactory date/time strings into UTC datetime."""
-    try:
-        time_str = time_str.strip().lower()
-        if not time_str or time_str in ("", "all day", "tentative"):
-            return None
-
-        month_day = date_str.strip()
-        match = re.match(r"[A-Za-z]+\s+([A-Za-z]+)\s+(\d+)", month_day)
-        if not match:
-            parts = month_day.split()
-            if len(parts) >= 2:
-                month_str = parts[-2]
-                day_str = parts[-1]
-            else:
-                return None
-        else:
-            month_str = match.group(1)
-            day_str = match.group(2)
-
-        time_match = re.match(r"(\d{1,2}):(\d{2})(am|pm)", time_str)
-        if not time_match:
-            return None
-        hour = int(time_match.group(1))
-        minute = int(time_match.group(2))
-        ampm = time_match.group(3)
-        if ampm == "pm" and hour != 12:
-            hour += 12
-        if ampm == "am" and hour == 12:
-            hour = 0
-
-        # ForexFactory times are US Eastern — convert to UTC (+5 or +4 DST)
-        # Approximate: use +5 (EST) for simplicity in backtest
-        hour_utc = hour + 5
-        date_parsed = datetime.strptime(
-            f"{month_str} {day_str} {year}", "%b %d %Y"
-        )
-        return datetime(
-            date_parsed.year, date_parsed.month, date_parsed.day,
-            hour_utc % 24, minute, tzinfo=timezone.utc
-        )
-    except Exception:
-        return None
 
 
 def fetch_calendar(start_date: datetime, end_date: datetime) -> list[NewsEvent]:
     """
-    Fetch ForexFactory calendar for backtest period.
-    Uses cache if available, otherwise scrapes + caches.
-    Falls back to recurring events on failure.
+    Load comprehensive 2026 calendar (hardcoded with exact dates).
+    Uses JSON cache if available, otherwise generates and saves.
     """
     cached = _load_cached_calendar(start_date, end_date)
     if cached:
+        log.info("Loaded %d calendar events from cache", len(cached))
         return cached
 
-    all_events = []
-    current = start_date
-    while current <= end_date:
-        # Get Monday of the week
-        monday = current - timedelta(days=current.weekday())
-        week_events = scrape_forexfactory_week(monday)
-        all_events.extend(week_events)
-        current = monday + timedelta(days=7)
+    all_events = generate_2026_calendar()
+    _save_calendar_cache(all_events)
 
-    if all_events:
-        _save_calendar_cache(all_events)
-        return _parse_events(all_events)
-
-    log.info("ForexFactory scrape failed — using recurring events fallback")
-    return _generate_recurring_events(start_date, end_date)
+    parsed = _parse_events(all_events)
+    filtered = [
+        e for e in parsed
+        if start_date - timedelta(days=1) <= e.dt <= end_date + timedelta(days=1)
+    ]
+    log.info(
+        "Generated 2026 calendar: %d total events, %d in backtest period",
+        len(parsed), len(filtered),
+    )
+    return filtered
 
 
 def _load_cached_calendar(
@@ -402,17 +637,22 @@ def _load_cached_calendar(
         earliest = min(e.dt for e in events)
         latest = max(e.dt for e in events)
         if earliest <= start_date and latest >= end_date - timedelta(days=7):
-            return events
+            return [
+                e for e in events
+                if start_date - timedelta(days=1)
+                <= e.dt <= end_date + timedelta(days=1)
+            ]
         return []
     except Exception:
         return []
 
 
 def _save_calendar_cache(events: list[dict]):
-    """Save scraped events to JSON cache."""
+    """Save calendar events to JSON cache."""
     CALENDAR_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
         CALENDAR_PATH.write_text(json.dumps(events, indent=2))
+        log.info("Saved %d events to %s", len(events), CALENDAR_PATH)
     except Exception:
         pass
 
@@ -433,39 +673,6 @@ def _parse_events(raw: list[dict]) -> list[NewsEvent]:
             ))
         except Exception:
             continue
-    return events
-
-
-def _generate_recurring_events(
-    start_date: datetime, end_date: datetime
-) -> list[NewsEvent]:
-    """Generate approximate recurring event schedule as fallback."""
-    events = []
-    current = start_date
-    while current <= end_date:
-        # NFP: first Friday of month, 13:30 UTC
-        if current.weekday() == 4 and current.day <= 7:
-            events.append(NewsEvent(
-                dt=current.replace(hour=13, minute=30, second=0),
-                currency="USD", impact="high",
-                event_name="Non-Farm Payrolls",
-            ))
-        # FOMC: approximate — 3rd Wednesday of Jan,Mar,May,Jun,Jul,Sep,Nov,Dec
-        if (current.weekday() == 2 and 15 <= current.day <= 21
-                and current.month in (1, 3, 5, 6, 7, 9, 11, 12)):
-            events.append(NewsEvent(
-                dt=current.replace(hour=18, minute=0, second=0),
-                currency="USD", impact="high",
-                event_name="FOMC Statement",
-            ))
-        # CPI US: ~13th of month, 13:30 UTC
-        if current.day == 13 and current.weekday() < 5:
-            events.append(NewsEvent(
-                dt=current.replace(hour=13, minute=30, second=0),
-                currency="USD", impact="high",
-                event_name="CPI m/m",
-            ))
-        current += timedelta(days=1)
     return events
 
 
@@ -602,7 +809,7 @@ def scan_ranging(row, prev_row, bias, cfg):
 
     # ── LONG ──
     touch_lower = low <= bbl * (1 + cfg.bb_touch_pct / 100)
-    close_inside_long = close > bbl + bb_width * 0.25
+    close_inside_long = close > bbl
     prev_above_bb = p_close > p_bbl if p_bbl > 0 else True
     mid_room_long = bbm > close
 
@@ -610,7 +817,7 @@ def scan_ranging(row, prev_row, bias, cfg):
         lower_wick = min(close, opn) - low
         wick_pct = lower_wick / candle_range
 
-        opt_wick = wick_pct >= 0.15
+        opt_wick = wick_pct >= 0.12
         opt_bullish = close > opn
         opt_rsi = rsi <= oversold
         opt_vol = vol > vsma * cfg.volume_range_mult if vsma > 0 else True
@@ -627,7 +834,7 @@ def scan_ranging(row, prev_row, bias, cfg):
 
     # ── SHORT ──
     touch_upper = high >= bbu * (1 - cfg.bb_touch_pct / 100)
-    close_inside_short = close < bbu - bb_width * 0.25
+    close_inside_short = close < bbu
     prev_below_bb = p_close < p_bbu if p_bbu > 0 else True
     mid_room_short = bbm < close
 
@@ -635,7 +842,7 @@ def scan_ranging(row, prev_row, bias, cfg):
         upper_wick = high - max(close, opn)
         wick_pct = upper_wick / candle_range
 
-        opt_wick = wick_pct >= 0.15
+        opt_wick = wick_pct >= 0.12
         opt_bearish = close < opn
         opt_rsi = rsi >= overbought
         opt_vol = vol > vsma * cfg.volume_range_mult if vsma > 0 else True

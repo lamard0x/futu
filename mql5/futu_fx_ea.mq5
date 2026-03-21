@@ -48,6 +48,10 @@ input double TrendMinRR     = 1.5;
 input int    EMA_Fast       = 9;
 input int    EMA_Mid        = 21;
 
+// Spread filter
+input double MaxSpreadPips     = 3.0;     // Max spread (pips) for FX pairs
+input double MaxSpreadPipsXAU  = 25.0;    // Max spread (pips) for XAU pairs
+
 // Trailing
 input double TrailBE_Pct    = 50.0;    // Move SL to BE at X% of TP distance
 input double PartialPct     = 50.0;    // Close X% at halfway to TP
@@ -234,7 +238,7 @@ void ScanRanging() {
          double reward = MathAbs(tp - close1);
          if (risk > 0 && reward / risk >= RangingMinRR) {
             double lots = CalcLots(close1, sl);
-            if (lots > 0) {
+            if (lots > 0 && CheckSpread()) {
                OpenOrder("buy", lots, sl, tp, "FUTU RANGE LONG");
             }
          }
@@ -264,7 +268,7 @@ void ScanRanging() {
          double reward = MathAbs(tp - close1);
          if (risk > 0 && reward / risk >= RangingMinRR) {
             double lots = CalcLots(close1, sl);
-            if (lots > 0) {
+            if (lots > 0 && CheckSpread()) {
                OpenOrder("sell", lots, sl, tp, "FUTU RANGE SHORT");
             }
          }
@@ -327,7 +331,7 @@ void ScanTrending() {
       double tp = close1 + 2.0 * risk;
       if (risk > 0 && (tp - close1) / risk >= TrendMinRR) {
          double lots = CalcLots(close1, sl);
-         if (lots > 0) OpenOrder("buy", lots, sl, tp, "FUTU TREND LONG");
+         if (lots > 0 && CheckSpread()) OpenOrder("buy", lots, sl, tp, "FUTU TREND LONG");
       }
    }
 
@@ -341,7 +345,7 @@ void ScanTrending() {
       double tp = close1 - 2.0 * risk;
       if (risk > 0 && (close1 - tp) / risk >= TrendMinRR) {
          double lots = CalcLots(close1, sl);
-         if (lots > 0) OpenOrder("sell", lots, sl, tp, "FUTU TREND SHORT");
+         if (lots > 0 && CheckSpread()) OpenOrder("sell", lots, sl, tp, "FUTU TREND SHORT");
       }
    }
 }
@@ -394,6 +398,26 @@ void ManagePositions() {
          }
       }
    }
+}
+
+//+------------------------------------------------------------------+
+//  Spread Check — returns true if spread is acceptable
+//+------------------------------------------------------------------+
+bool CheckSpread() {
+   double spread = SymbolInfoDouble(_Symbol, SYMBOL_ASK) - SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double point  = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   if (point <= 0) return false;
+   double spread_pips = spread / (point * 10);
+
+   double max_spread = MaxSpreadPips;
+   if (StringFind(_Symbol, "XAU") >= 0) max_spread = MaxSpreadPipsXAU;
+
+   if (spread_pips > max_spread) {
+      Print("SPREAD SKIP: ", _Symbol, " spread=", DoubleToString(spread_pips, 1),
+            " pips > max=", DoubleToString(max_spread, 1));
+      return false;
+   }
+   return true;
 }
 
 //+------------------------------------------------------------------+
