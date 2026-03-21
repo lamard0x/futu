@@ -263,7 +263,7 @@ def check_ranging_long(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sym
     # Counter-trend (H1 bearish): need 4/4 — only trade perfect setups
     # With-trend / neutral: need 3/4 — 0.75x vol if not full
     oversold_threshold, _ = get_rsi_thresholds(cfg, bias)
-    opt_wick = wick_pct >= 0.15
+    opt_wick = wick_pct >= 0.10
     opt_bullish = close > opn
     opt_rsi = rsi <= oversold_threshold
     opt_vol = volume > vol_sma * cfg.volume_range_mult if vol_sma > 0 else True
@@ -393,7 +393,7 @@ def check_ranging_short(df: pd.DataFrame, cfg: StrategyConfig, bias: HTFBias, sy
     # Counter-trend (H1 bullish): need 4/4 — only trade perfect setups
     # With-trend / neutral: need 3/4 — 0.75x vol if not full
     _, overbought_threshold = get_rsi_thresholds(cfg, bias)
-    opt_wick = wick_pct >= 0.15
+    opt_wick = wick_pct >= 0.10
     opt_bearish = close < opn
     opt_rsi = rsi >= overbought_threshold
     opt_vol = volume > vol_sma * cfg.volume_range_mult if vol_sma > 0 else True

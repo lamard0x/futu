@@ -48,12 +48,12 @@ class StrategyConfig:
     volume_trend_mult: float = 1.0
 
     # Ranging mode entry — RSI Hayden zones (adjusted for RSI period 10)
-    rsi_oversold: float = 45.0       # neutral default
+    rsi_oversold: float = 48.0       # neutral default — relaxed for LONG
     rsi_overbought: float = 55.0     # neutral default
-    rsi_bull_oversold: float = 42.0   # bullish bias: easier long
-    rsi_bull_overbought: float = 58.0 # bullish bias: still filtered but achievable
-    rsi_bear_oversold: float = 35.0   # bearish bias: harder long
-    rsi_bear_overbought: float = 58.0 # bearish bias: easier short
+    rsi_bull_oversold: float = 48.0   # bullish bias: easier long
+    rsi_bull_overbought: float = 63.0 # bullish bias: only SHORT when clearly overbought
+    rsi_bear_oversold: float = 40.0   # bearish bias: counter-trend long easier
+    rsi_bear_overbought: float = 63.0 # bearish bias: only SHORT when clearly overbought
     bb_touch_pct: float = 0.8
     volume_range_mult: float = 0.4
 
@@ -93,8 +93,8 @@ class RiskConfig:
     max_symbols: int = 15
     cooldown_candles: int = 0
     min_rr_trending: float = 1.5
-    min_rr_ranging: float = 1.2
-    min_rr_ranging_confluence: float = 1.2  # R:R when S/D confluence >= 2 (same as normal)
+    min_rr_ranging: float = 1.5
+    min_rr_ranging_confluence: float = 1.5  # R:R when S/D confluence >= 2 (same as normal)
 
 
 @dataclass
