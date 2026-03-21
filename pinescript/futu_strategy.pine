@@ -290,11 +290,11 @@ t_short_opt_candle = c_close < c_open
 t_short_opt_count  = (t_short_opt_bias ? 1 : 0) + (t_short_opt_wick ? 1 : 0) + (t_short_opt_rsi ? 1 : 0) + (t_short_opt_candle ? 1 : 0)
 
 trend_long_full    = t_long_mandatory  and t_long_opt_count  == 4
-trend_long_partial = t_long_mandatory  and t_long_opt_count  >= 2 and t_long_opt_count < 4
+trend_long_partial = t_long_mandatory  and t_long_opt_count  >= 3 and t_long_opt_count < 4
 trend_long         = trend_long_full or (trend_long_partial and show_75pct)
 
 trend_short_full    = t_short_mandatory and t_short_opt_count == 4
-trend_short_partial = t_short_mandatory and t_short_opt_count >= 2 and t_short_opt_count < 4
+trend_short_partial = t_short_mandatory and t_short_opt_count >= 3 and t_short_opt_count < 4
 trend_short         = trend_short_full or (trend_short_partial and show_75pct)
 
 // ═══════════════════════════════════════════════════
