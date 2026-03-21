@@ -21,12 +21,12 @@ sl_range_mult  = input.float(0.5, "SL Ranging ATR Mult")
 sl_trend_mult  = input.float(1.5, "SL Trending ATR Mult")
 
 // RSI Hayden zones
-rsi_bull_os  = input.float(48.0, "RSI Bull Oversold", group="RSI Hayden")
-rsi_bull_ob  = input.float(63.0, "RSI Bull Overbought", group="RSI Hayden")
-rsi_bear_os  = input.float(40.0, "RSI Bear Oversold", group="RSI Hayden")
-rsi_bear_ob  = input.float(63.0, "RSI Bear Overbought", group="RSI Hayden")
-rsi_neut_os  = input.float(48.0, "RSI Neutral Oversold", group="RSI Hayden")
-rsi_neut_ob  = input.float(55.0, "RSI Neutral Overbought", group="RSI Hayden")
+rsi_bull_os  = input.float(46.0, "RSI Bull Oversold", group="RSI Hayden")
+rsi_bull_ob  = input.float(60.0, "RSI Bull Overbought", group="RSI Hayden")
+rsi_bear_os  = input.float(38.0, "RSI Bear Oversold", group="RSI Hayden")
+rsi_bear_ob  = input.float(60.0, "RSI Bear Overbought", group="RSI Hayden")
+rsi_neut_os  = input.float(46.0, "RSI Neutral Oversold", group="RSI Hayden")
+rsi_neut_ob  = input.float(58.0, "RSI Neutral Overbought", group="RSI Hayden")
 
 // Demand/Supply zone inputs
 zone_lookback  = input.int(50, "Zone Lookback", minval=10, group="S/D Zones")
@@ -234,13 +234,13 @@ r_long_mandatory  := r_long_mandatory  and r_long_anti_brk
 r_short_mandatory := r_short_mandatory and r_short_anti_brk
 
 // Optional conditions (count 0-4) — ranging needs 3/4 min (90%)
-r_long_opt_wick   = c_lower_wick_pct >= 0.10
+r_long_opt_wick   = c_lower_wick_pct >= 0.12
 r_long_opt_candle = c_close > c_open
 r_long_opt_rsi    = rsi_val[1] <= rsi_os
 r_long_opt_vol    = volume[1] > vol_sma[1] * vol_range_mult
 r_long_opt_count  = (r_long_opt_wick ? 1 : 0) + (r_long_opt_candle ? 1 : 0) + (r_long_opt_rsi ? 1 : 0) + (r_long_opt_vol ? 1 : 0)
 
-r_short_opt_wick   = c_upper_wick_pct >= 0.10
+r_short_opt_wick   = c_upper_wick_pct >= 0.12
 r_short_opt_candle = c_close < c_open
 r_short_opt_rsi    = rsi_val[1] >= rsi_ob
 r_short_opt_vol    = volume[1] > vol_sma[1] * vol_range_mult
